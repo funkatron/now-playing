@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# macOS
+.DS_Store
+
+# Virtual environment
+venv/
+
+# app
+_data/
+_logs/
+*.pid
+*.log
