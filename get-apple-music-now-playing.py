@@ -8,7 +8,7 @@ def get_current_song():
     music_app = ScriptingBridge.SBApplication.applicationWithBundleIdentifier_("com.apple.Music")
     
     # Check if something is currently playing
-    if music_app.isRunning() and music_app.currentTrack() is not None:
+    if music_app.isRunning() and music_app.currentTrack() and music_app.currentTrack().name():
         current_track = music_app.currentTrack()
         title = current_track.name()
         artist = current_track.artist()
