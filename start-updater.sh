@@ -1,11 +1,17 @@
-# This script is run at startup to start the updater in the background. It runs the update.sh script every 5 seconds.
+# This script is run at startup to start the updater in the background.
+
+# make this overridable by setting the environment variable, or if it is passed
+# as an argument to the script, but otherwise default to 5 seconds;.
+INTERVAL_SECONDS=${INTERVAL_SECONDS:-5}
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 function run_updater {
+    # report that we are starting and what the interval is
+    echo "Starting $DIR/update.sh with interval of $INTERVAL_SECONDS seconds..."
     while true; do
         $DIR/update.sh
-        sleep 5
+        sleep $INTERVAL_SECONDS
     done
 }
 

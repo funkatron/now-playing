@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # This script retrieves the current song playing on Apple Music, and writes it to a file.
-# It is intended to be run as a cron job every minute, and will only write to the file if the song has changed.
+# It is intended to be run every second, and will only write to the file if the song has changed.
 # The script also logs its output to a file in the _logs directory.
 
 # get the script's directory
@@ -28,14 +28,17 @@ exec > >(tee -a "$LOGSDIR/$(basename "$0")_$CURRENT_DATE.log") 2>&1
 # set python log level to "debug"
 export PYTHON_LOG_LEVEL=DEBUG;
 # run the python script using the venv interpreter to get the current song, and write it to a tmp file
-$DIR/venv/bin/python $DIR/get-apple-music-now-playing.py --info > $CURRENT_SONG_TMP_FILE
+echo "$LOG_PREFIX Running get-apple-music-now-playing.py to get current song info.";
+# capture the output and display
+COMMAND="$DIR/venv/bin/python $DIR/get-apple-music-now-playing.py --info"
+echo "$LOG_PREFIX Running command: $COMMAND > $CURRENT_SONG_TMP_FILE"
+$COMMAND > $CURRENT_SONG_TMP_FILE
 
 # if the tmp file is not empty, move it to current_song.txt
 if [ -s $CURRENT_SONG_TMP_FILE ]; then
     # if the contents of the tmp file are identical to the current_song.txt, just remove the tmp file.
     if cmp -s $CURRENT_SONG_TMP_FILE $CURRENT_SONG_FILE; then
         rm $CURRENT_SONG_TMP_FILE
-        echo "$LOG_PREFIX No change in current song; skipping update."
         $DIR/venv/bin/python $DIR/get-apple-music-now-playing.py --update-obs
 
     else

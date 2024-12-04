@@ -102,6 +102,10 @@ def get_artworks_for_track() -> list:
 
     return artwork_paths
 
+# make a little cache for the image_path so that we
+# don't update the image every time we run the script
+current_image_path = None
+
 def update_obs_now_playing_image(image_path: str):
     import sys
     import time
@@ -109,12 +113,16 @@ def update_obs_now_playing_image(image_path: str):
     import logging
     logging.basicConfig(level=logging.DEBUG)
 
+    if current_image_path and current_image_path == image_path:
+        logging.getLogger().debug("Image path is the same as the current image path. Skipping update.")
+        return
+
     sys.path.append('../')
     from obswebsocket import obsws, requests  # noqa: E402
 
     host = "localhost"
-    port = 4460
-    password = "y2cQjB2ckShmouDj"
+    port = 4455
+    password = "tH3NSzMaqHHaWExM"
 
     ws = obsws(host, port, password)
     ws.connect()
@@ -163,6 +171,8 @@ if __name__ == "__main__":
     parser.add_argument('--update-obs', action='store_true', help="Update the OBS now playing image.")
     args = parser.parse_args()
 
+    logger = logging.getLogger()
+
     if args.image:
         # display the album cover
         song_image = get_artworks_for_track()
@@ -175,10 +185,10 @@ if __name__ == "__main__":
         song_image = get_artworks_for_track()
         if song_image:
             song_image = song_image[0]
-            print("Updating OBS now playing image to the current song's album art: ", song_image)
+            logger.debug("Updating OBS now playing image to the current song's album art: ", song_image)
             update_obs_now_playing_image(song_image)
         else:
-            print("No album art found.")
+            logger.debug("No album art found for the current song.")
 
     else: # default to current song info
         song_info = get_current_song()
