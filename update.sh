@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # This script retrieves the current song playing on Apple Music, and writes it to a file.
 # It is intended to be run as a cron job every minute, and will only write to the file if the song has changed.
 # The script also logs its output to a file in the _logs directory.
@@ -21,24 +23,26 @@ CURRENT_SONG_TMP_FILE=$DATADIR/current_song-tmp.txt
 CURRENT_SONG_DATED_FILE=$DATADIR/played_song-$CURRENT_DATETIME.txt
 
 # log any output to a file: _logs/<script-name>_<date-started>.log
-exec &> $LOGSDIR/update_$CURRENT_DATE.log
+exec > >(tee -a "$LOGSDIR/$(basename "$0")_$CURRENT_DATE.log") 2>&1
 
+# set python log level to "debug"
+export PYTHON_LOG_LEVEL=DEBUG;
 # run the python script using the venv interpreter to get the current song, and write it to a tmp file
-$DIR/venv/bin/python $DIR/get-apple-music-now-playing.py > $CURRENT_SONG_TMP_FILE
+$DIR/venv/bin/python $DIR/get-apple-music-now-playing.py --info > $CURRENT_SONG_TMP_FILE
 
 # if the tmp file is not empty, move it to current_song.txt
 if [ -s $CURRENT_SONG_TMP_FILE ]; then
     # if the contents of the tmp file are identical to the current_song.txt, just remove the tmp file.
     if cmp -s $CURRENT_SONG_TMP_FILE $CURRENT_SONG_FILE; then
         rm $CURRENT_SONG_TMP_FILE
-        # echo "$LOG_PREFIX No change in current song; skipping update."
+        echo "$LOG_PREFIX No change in current song; skipping update."
+        $DIR/venv/bin/python $DIR/get-apple-music-now-playing.py --update-obs
+
     else
-        # copy the previous current_song.txt to current_song-<creation_datetime>.txt, if it exists
-        [ -f $CURRENT_SONG_FILE ] && cp $CURRENT_SONG_FILE $CURRENT_SONG_DATED_FILE
         # move the tmp file to current_song.txt
         mv $CURRENT_SONG_TMP_FILE $CURRENT_SONG_FILE
-        # get the first two lines of the current song file, if they exist, and write them to the log -- but with all newlines replaced with spaces
-        CURRENT_SONG=$(head -n 2 $CURRENT_SONG_FILE | tr '\n' ' by ')
-        echo "$LOG_PREFIX Updated current song: $CURRENT_SONG"
+        echo "$LOG_PREFIX Updated current song: $(cat $CURRENT_SONG_FILE)"
+        # update the now playing image
+        $DIR/venv/bin/python $DIR/get-apple-music-now-playing.py --update-obs
     fi
 fi
