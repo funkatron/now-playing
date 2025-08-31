@@ -37,14 +37,17 @@ This repository contains scripts to retrieve and display the currently playing s
 2. Start an updater loop (choose Apple Music or Spotify):
 
     ```shell
-    # Apple Music (defaults to Apple if you use this starter)
+    # Apple Music (explicit wrapper)
+    ./start-apple-music-updater.sh
+
+    # Apple Music (generic starter; defaults to Apple)
     ./start-updater.sh
 
     # Spotify
     ./start-spotify-updater.sh
     ```
 
-    Each starter runs its respective updater every 5 seconds. You can also run the unified updater directly and choose a source by arg or env:
+    Each starter runs the unified updater every 5 seconds. You can also run the unified updater directly and choose a source by arg or env:
 
     ```shell
     # one-shot, Apple
@@ -54,6 +57,7 @@ This repository contains scripts to retrieve and display the currently playing s
     ./update.sh spotify
 
     # or via env var (arg takes precedence over env)
+    NOW_PLAYING_SOURCE=applemusic ./update.sh
     NOW_PLAYING_SOURCE=spotify ./update.sh
     ```
 
@@ -72,6 +76,20 @@ This repository contains scripts to retrieve and display the currently playing s
     - Spotify output file: `_data/spotify_current_song.txt`
 
     Any logging will be written to `_logs/update_<YYYY-MM-DD>.log`.
+
+    You can also directly use the unified Python CLI without the shell script:
+
+    ```shell
+    # Print four-line info and update files
+    python3 -m now_playing applemusic --info
+    python3 -m now_playing spotify --info
+
+    # Get first artwork path
+    python3 -m now_playing spotify --image
+
+    # Update OBS image source
+    python3 -m now_playing applemusic --update-obs
+    ```
 
 3. Point your display program to the appropriate file:
 
