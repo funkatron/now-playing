@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# This script retrieves the current song playing on Apple Music, and writes it to a file.
-# It is intended to be run every second, and will only write to the file if the song has changed.
-# The script also logs its output to a file in the _logs directory.
+# Unified updater for Apple Music or Spotify.
+# Usage: update.sh [applemusic|spotify]
+# Or set NOW_PLAYING_SOURCE=applemusic|spotify (arg takes precedence over env).
 
 # get the script's directory
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -13,39 +13,68 @@ LOGSDIR=$DIR/_logs
 mkdir -p $DATADIR
 mkdir -p $LOGSDIR
 
-# define the file paths for the current song
+# source selection (default applemusic)
+CLI_SOURCE="$1"
+ENV_SOURCE="${NOW_PLAYING_SOURCE:-}"
+if [ -n "$CLI_SOURCE" ]; then
+    SOURCE="$CLI_SOURCE"
+elif [ -n "$ENV_SOURCE" ]; then
+    SOURCE="$ENV_SOURCE"
+else
+    SOURCE="applemusic"
+fi
+
+case "$SOURCE" in
+  applemusic|apple|music)
+    RUN_SCRIPT="get-apple-music-now-playing.py"
+    CURRENT_SONG_FILE=$DATADIR/apple_current_song.txt
+    CURRENT_SONG_TMP_FILE=$DATADIR/apple_current_song-tmp.txt
+    ;;
+  spotify|sp)
+    RUN_SCRIPT="get-spotify-now-playing.py"
+    CURRENT_SONG_FILE=$DATADIR/spotify_current_song.txt
+    CURRENT_SONG_TMP_FILE=$DATADIR/spotify_current_song-tmp.txt
+    ;;
+  *)
+    echo "Unknown source '$SOURCE'. Use 'applemusic' or 'spotify'." >&2
+    exit 1
+    ;;
+esac
+
+# define log prefix
 CURRENT_DATETIME=$(date +"%Y%m%d_%H%M%S")
 CURRENT_DATE=$(date +"%Y-%m-%d")
-LOG_PREFIX="[$(basename $0) $CURRENT_DATETIME]"
-
-CURRENT_SONG_FILE=$DATADIR/current_song.txt
-CURRENT_SONG_TMP_FILE=$DATADIR/current_song-tmp.txt
-CURRENT_SONG_DATED_FILE=$DATADIR/played_song-$CURRENT_DATETIME.txt
+LOG_PREFIX="[$(basename $0) $CURRENT_DATETIME][$SOURCE]"
 
 # log any output to a file: _logs/<script-name>_<date-started>.log
 exec > >(tee -a "$LOGSDIR/$(basename "$0")_$CURRENT_DATE.log") 2>&1
 
 # set python log level to "debug"
 export PYTHON_LOG_LEVEL=DEBUG;
-# run the python script using the venv interpreter to get the current song, and write it to a tmp file
-echo "$LOG_PREFIX Running get-apple-music-now-playing.py to get current song info.";
-# capture the output and display
-COMMAND="$DIR/venv/bin/python $DIR/get-apple-music-now-playing.py --info"
+
+echo "$LOG_PREFIX Running $RUN_SCRIPT to get current song info.";
+COMMAND="$DIR/venv/bin/python $DIR/$RUN_SCRIPT --info"
 echo "$LOG_PREFIX Running command: $COMMAND > $CURRENT_SONG_TMP_FILE"
 $COMMAND > $CURRENT_SONG_TMP_FILE
 
-# if the tmp file is not empty, move it to current_song.txt
 if [ -s $CURRENT_SONG_TMP_FILE ]; then
-    # if the contents of the tmp file are identical to the current_song.txt, just remove the tmp file.
     if cmp -s $CURRENT_SONG_TMP_FILE $CURRENT_SONG_FILE; then
-        rm $CURRENT_SONG_TMP_FILE
-        $DIR/venv/bin/python $DIR/get-apple-music-now-playing.py --update-obs
-
+        rm -f $CURRENT_SONG_TMP_FILE
+        # update OBS image for the selected source
+        if [ "$SOURCE" = "spotify" ] || [ "$SOURCE" = "sp" ]; then
+            $DIR/venv/bin/python $DIR/get-spotify-now-playing.py --update-obs
+        else
+            $DIR/venv/bin/python $DIR/get-apple-music-now-playing.py --update-obs
+        fi
     else
-        # move the tmp file to current_song.txt
         mv $CURRENT_SONG_TMP_FILE $CURRENT_SONG_FILE
         echo "$LOG_PREFIX Updated current song: $(cat $CURRENT_SONG_FILE)"
-        # update the now playing image
-        $DIR/venv/bin/python $DIR/get-apple-music-now-playing.py --update-obs
+        if [ "$SOURCE" = "spotify" ] || [ "$SOURCE" = "sp" ]; then
+            $DIR/venv/bin/python $DIR/get-spotify-now-playing.py --update-obs
+        else
+            $DIR/venv/bin/python $DIR/get-apple-music-now-playing.py --update-obs
+        fi
     fi
+else
+    touch $CURRENT_SONG_FILE
 fi

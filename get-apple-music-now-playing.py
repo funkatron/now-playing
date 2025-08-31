@@ -59,6 +59,13 @@ def safe_filename(filename):
 def get_artworks_for_track() -> list:
     track = get_current_music_app_track()
     if not track:
+        # Ensure Apple artworks file exists as empty when no track
+        now_playing_artworks_file = os.path.join(os.path.dirname(__file__), "_data", "apple_now_playing_artworks.txt")
+        try:
+            # Create empty file if missing
+            open(now_playing_artworks_file, "a").close()
+        except Exception:
+            pass
         return []
 
     artworks = []
@@ -88,17 +95,27 @@ def get_artworks_for_track() -> list:
             artwork_paths.append(cache_filepath)
 
 
-    now_playing_artworks_file = os.path.join(os.path.dirname(__file__), "_data", "now_playing_artworks.txt")
+    now_playing_artworks_file = os.path.join(os.path.dirname(__file__), "_data", "apple_now_playing_artworks.txt")
+    # Prepare new content
+    new_content = "".join(path + "\n" for path in artwork_paths)
+
+    # Read existing content if any
+    existing_content = None
+    try:
+        with open(now_playing_artworks_file, "r") as f:
+            existing_content = f.read()
+    except FileNotFoundError:
+        existing_content = None
+
     if artwork_paths:
-        with open(now_playing_artworks_file, "w") as f:
-            for artwork_path in artwork_paths:
-                f.write(artwork_path + "\n")
+        # Only write if content changed
+        if existing_content != new_content:
+            with open(now_playing_artworks_file, "w") as f:
+                f.write(new_content)
     else:
-        # Remove the file if there are no artworks
-        try:
-            os.remove(now_playing_artworks_file)
-        except FileNotFoundError:
-            pass
+        # Ensure an empty file exists for consumers
+        if existing_content is None:
+            open(now_playing_artworks_file, "a").close()
 
     return artwork_paths
 
@@ -107,6 +124,7 @@ def get_artworks_for_track() -> list:
 current_image_path = None
 
 def update_obs_now_playing_image(image_path: str):
+    global current_image_path
     import sys
     import time
 
@@ -129,11 +147,12 @@ def update_obs_now_playing_image(image_path: str):
 
     try:
         ws.call(requests.SetInputSettings(
-            inputName="NPImage",
+            inputName="NPImageApple",
             inputSettings={
                 "file": image_path,
             }
         ))
+        current_image_path = image_path
 
     except KeyboardInterrupt:
         pass

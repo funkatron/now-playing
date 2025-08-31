@@ -10,7 +10,7 @@
             "name": "Bash-Debug (update.sh)",
             "cwd": "${workspaceFolder}",
             "program": "${workspaceFolder}/update.sh",
-            "args": []
+            "args": ["applemusic"]
         },
     ]
 }
