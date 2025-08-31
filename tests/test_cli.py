@@ -29,7 +29,7 @@ def test_cli_info_writes_and_prints(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("PYTHON_LOG_LEVEL", "WARNING")
 
     # Act
-    monkeypatch.setattr(sys, "argv", ["now_playing", "applemusic", "--info"]) 
+    monkeypatch.setattr(sys, "argv", ["now_playing", "applemusic", "--info"])
     cli.main()
 
     # Assert
@@ -55,7 +55,7 @@ def test_cli_image_writes_list_and_prints_first(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli, "resolve_provider", fake_resolve)
     monkeypatch.setenv("PYTHON_LOG_LEVEL", "WARNING")
 
-    monkeypatch.setattr(sys, "argv", ["now_playing", "applemusic", "--image"]) 
+    monkeypatch.setattr(sys, "argv", ["now_playing", "applemusic", "--image"])
     cli.main()
 
     out = capsys.readouterr().out.strip()
@@ -91,7 +91,7 @@ def test_cli_update_obs_calls_client(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "OBSClient", fake_obs_ctor)
     monkeypatch.setenv("PYTHON_LOG_LEVEL", "WARNING")
 
-    monkeypatch.setattr(sys, "argv", ["now_playing", "spotify", "--update-obs"]) 
+    monkeypatch.setattr(sys, "argv", ["now_playing", "spotify", "--update-obs"])
     cli.main()
 
     # OBS client called with correct source and path
