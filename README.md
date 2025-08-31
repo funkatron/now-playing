@@ -37,11 +37,8 @@ This repository contains scripts to retrieve and display the currently playing s
 2. Start an updater loop (choose Apple Music or Spotify):
 
     ```shell
-    # Apple Music (explicit wrapper)
+    # Apple Music
     ./start-apple-music-updater.sh
-
-    # Apple Music (generic starter; defaults to Apple)
-    ./start-updater.sh
 
     # Spotify
     ./start-spotify-updater.sh
@@ -100,7 +97,7 @@ This repository contains scripts to retrieve and display the currently playing s
 
     ```shell
     # Apple Music
-    ./stop-updater.sh
+    ./stop-apple-music-updater.sh
 
     # Spotify
     ./stop-spotify-updater.sh

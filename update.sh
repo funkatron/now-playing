@@ -26,12 +26,10 @@ fi
 
 case "$SOURCE" in
   applemusic|apple|music)
-    RUN_SCRIPT="get-apple-music-now-playing.py"
     CURRENT_SONG_FILE=$DATADIR/apple_current_song.txt
     CURRENT_SONG_TMP_FILE=$DATADIR/apple_current_song-tmp.txt
     ;;
   spotify|sp)
-    RUN_SCRIPT="get-spotify-now-playing.py"
     CURRENT_SONG_FILE=$DATADIR/spotify_current_song.txt
     CURRENT_SONG_TMP_FILE=$DATADIR/spotify_current_song-tmp.txt
     ;;
@@ -51,9 +49,11 @@ exec > >(tee -a "$LOGSDIR/$(basename "$0")_$CURRENT_DATE.log") 2>&1
 
 # set python log level to "debug"
 export PYTHON_LOG_LEVEL=DEBUG;
+# ensure the repo path is importable for `python -m now_playing`
+export PYTHONPATH="$DIR:${PYTHONPATH}"
 
-echo "$LOG_PREFIX Running $RUN_SCRIPT to get current song info.";
-COMMAND="$DIR/venv/bin/python $DIR/$RUN_SCRIPT --info"
+echo "$LOG_PREFIX Running unified CLI for source $SOURCE to get current song info.";
+COMMAND="$DIR/venv/bin/python -m now_playing $SOURCE --info"
 echo "$LOG_PREFIX Running command: $COMMAND > $CURRENT_SONG_TMP_FILE"
 $COMMAND > $CURRENT_SONG_TMP_FILE
 
@@ -61,19 +61,11 @@ if [ -s $CURRENT_SONG_TMP_FILE ]; then
     if cmp -s $CURRENT_SONG_TMP_FILE $CURRENT_SONG_FILE; then
         rm -f $CURRENT_SONG_TMP_FILE
         # update OBS image for the selected source
-        if [ "$SOURCE" = "spotify" ] || [ "$SOURCE" = "sp" ]; then
-            $DIR/venv/bin/python $DIR/get-spotify-now-playing.py --update-obs
-        else
-            $DIR/venv/bin/python $DIR/get-apple-music-now-playing.py --update-obs
-        fi
+        $DIR/venv/bin/python -m now_playing $SOURCE --update-obs
     else
         mv $CURRENT_SONG_TMP_FILE $CURRENT_SONG_FILE
         echo "$LOG_PREFIX Updated current song: $(cat $CURRENT_SONG_FILE)"
-        if [ "$SOURCE" = "spotify" ] || [ "$SOURCE" = "sp" ]; then
-            $DIR/venv/bin/python $DIR/get-spotify-now-playing.py --update-obs
-        else
-            $DIR/venv/bin/python $DIR/get-apple-music-now-playing.py --update-obs
-        fi
+        $DIR/venv/bin/python -m now_playing $SOURCE --update-obs
     fi
 else
     touch $CURRENT_SONG_FILE
