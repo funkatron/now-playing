@@ -1,8 +1,6 @@
 # Dead Agent "Now Playing" Scripts
 
-This repository contains scripts to retrieve and display the currently playing song from various music players on MacOS.
-
-Right now only Apple Music is supported, but I plan to add support for audio sources in the future.
+This repository contains scripts to retrieve and display the currently playing song from Apple Music and the Spotify desktop app on macOS.
 
 # Requirements
 
@@ -34,17 +32,32 @@ Right now only Apple Music is supported, but I plan to add support for audio sou
 
 ## Usage
 
-1. Open a terminal and navigate to the directory where the `start-updater.sh` script is located.
+1. Open a terminal and navigate to the repository directory.
 
-2. Run the script using the following command:
+2. Start an updater loop (choose Apple Music or Spotify):
 
     ```shell
+    # Apple Music (defaults to Apple if you use this starter)
     ./start-updater.sh
+
+    # Spotify
+    ./start-spotify-updater.sh
     ```
 
-    The updater will start running in the background and will execute the `update.sh` script every 5 seconds.
+    Each starter runs its respective updater every 5 seconds. You can also run the unified updater directly and choose a source by arg or env:
 
-    When the `update.sh` script is executed, it will retrieve the currently playing song from Apple Music and write it to the ` `. The text is formatted as follows, with `\n` used for newlines:
+    ```shell
+    # one-shot, Apple
+    ./update.sh applemusic
+
+    # one-shot, Spotify
+    ./update.sh spotify
+
+    # or via env var (arg takes precedence over env)
+    NOW_PLAYING_SOURCE=spotify ./update.sh
+    ```
+
+    Output files (namespaced by source) use this 4-line format (newlines between fields):
 
     ```
     "<song name>"
@@ -53,19 +66,50 @@ Right now only Apple Music is supported, but I plan to add support for audio sou
     <year (if available)>
     ```
 
-    Any logging will be written to the `_logs/update_<YYYY-MM-DD>.log` file.
+    Notes:
+    - For Spotify, the 4th line (year) is intentionally blank.
+    - Apple output file: `_data/apple_current_song.txt`
+    - Spotify output file: `_data/spotify_current_song.txt`
 
-3. Point the program you want to *display* the currently playing song to the `_data/current_song.txt` file. The information in this file will be updated every time the `update.sh` script is executed.
+    Any logging will be written to `_logs/update_<YYYY-MM-DD>.log`.
 
-4. To stop the updater, you can use the following command:
+3. Point your display program to the appropriate file:
+
+    - Apple Music: `_data/apple_current_song.txt`
+    - Spotify: `_data/spotify_current_song.txt`
+
+4. To stop an updater running in the background:
 
     ```shell
+    # Apple Music
     ./stop-updater.sh
+
+    # Spotify
+    ./stop-spotify-updater.sh
     ```
 
-    This will send a termination signal to the updater process using the PID stored in the `updater.pid` file.
+    These send a termination signal to the updater process using the PID stored in their respective PID files.
 
-## Structure of track and music player classes
+## Artwork files
+
+- Apple Music artworks list: `_data/apple_now_playing_artworks.txt`
+- Spotify artworks list: `_data/spotify_now_playing_artworks.txt`
+
+Each file contains one or more absolute file paths (one per line) pointing to cached cover images under `~/.now-playing/artwork-cache/`. When no artwork is available, an empty file is created.
+
+## OBS integration
+
+- Image sources are updated via obs-websocket:
+  - Apple Music image source name: `NPImageApple`
+  - Spotify image source name: `NPImageSpotify`
+- Create corresponding Text (GDI+/Freetype2) sources that read from the namespaced song files above if you want on-screen text.
+- The Python client connects to `localhost:4455` (OBS 28+ default) with the configured password inside the scripts.
+
+## Permissions
+
+macOS will prompt to allow these scripts to control Apple Music and Spotify. Approve the prompts or enable in System Settings → Privacy & Security → Automation.
+
+## Structure of track and music player classes (Apple Music)
 
 ### Music App
 ```python
