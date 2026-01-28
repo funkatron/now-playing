@@ -11,8 +11,10 @@ def write_if_changed(path: str, new_content: str) -> bool:
     if existing == new_content:
         return False
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w") as f:
         f.write(new_content)
+    os.replace(tmp_path, path)
     return True
 
 
@@ -25,8 +27,10 @@ def write_artworks_list(path: str, artwork_paths: list[str]) -> None:
         existing = None
     if artwork_paths:
         if existing != new_content:
-            with open(path, "w") as f:
+            tmp_path = path + ".tmp"
+            with open(tmp_path, "w") as f:
                 f.write(new_content)
+            os.replace(tmp_path, path)
     else:
         if existing is None:
             open(path, "a").close()
