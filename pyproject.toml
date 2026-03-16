@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "now-playing"
+version = "0.1.0"
+description = "Local now playing daemon for Apple Music, Spotify, and OBS"
+requires-python = ">=3.9"
+dependencies = [
+  "obs-websocket-py==1.0",
+  "pyobjc-core==10.1",
+  "pyobjc-framework-AppKit==10.1",
+  "pyobjc-framework-Foundation==10.1",
+  "pyobjc-framework-ScriptingBridge==10.1",
+]
+
+[project.scripts]
+np = "np_service:cli"
+
+[tool.setuptools]
+py-modules = ["np_service"]
+packages = ["now_playing"]
