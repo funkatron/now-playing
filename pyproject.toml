@@ -9,10 +9,9 @@ description = "Local now playing daemon for Apple Music, Spotify, and OBS"
 requires-python = ">=3.9"
 dependencies = [
   "obs-websocket-py==1.0",
-  "pyobjc-core==10.1",
-  "pyobjc-framework-AppKit==10.1",
-  "pyobjc-framework-Foundation==10.1",
+  "pyobjc==10.1",
   "pyobjc-framework-ScriptingBridge==10.1",
+  "pytest",
 ]
 
 [project.scripts]
