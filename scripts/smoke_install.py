@@ -16,6 +16,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -71,16 +72,29 @@ def smoke_local() -> None:
 
 def smoke_service() -> None:
     print("== Service checks ==")
-    print("This will install or refresh the per-user launchd job, then query the local HTTP API.")
+    print(
+        "This will install or refresh the per-user launchd job, then query the local HTTP API. "
+        "The service is left running afterward."
+    )
     run(["uv", "run", "np", "install-service"])
 
-    health = run(["curl", "-s", DEFAULT_HEALTH_URL], capture=True)
-    if json.loads(health.stdout).get("status") != "ok":
+    health_payload = None
+    for _ in range(10):
+        try:
+            health = run(["curl", "-s", DEFAULT_HEALTH_URL], capture=True)
+            health_payload = json.loads(health.stdout)
+            break
+        except (subprocess.CalledProcessError, json.JSONDecodeError):
+            time.sleep(0.5)
+
+    if not health_payload or health_payload.get("status") != "ok":
         raise RuntimeError("Health endpoint did not return ok")
 
     current = run(["curl", "-s", DEFAULT_CURRENT_URL], capture=True)
     validate_json_output(current.stdout)
     print("Service checks passed.")
+    print("The launchd service is still installed and running.")
+    print("Stop it with: uv run np uninstall-service")
 
 
 def main(argv: list[str]) -> int:
@@ -88,7 +102,8 @@ def main(argv: list[str]) -> int:
         description=(
             "Run an operator-facing smoke test for the now-playing install flow. "
             "By default this validates local CLI setup and output-file generation. "
-            "Use --with-service to also install/refresh the launchd service and verify the local HTTP API."
+            "Use --with-service to also install/refresh the launchd service, verify the local HTTP API, "
+            "and leave the service running afterward."
         )
     )
     parser.add_argument(

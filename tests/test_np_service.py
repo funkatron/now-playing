@@ -231,16 +231,18 @@ def test_sync_updates_obs_only_when_track_changes(monkeypatch, tmp_path):
     monkeypatch.setattr(np_service, "repo_dir", lambda: repo_root)
     monkeypatch.setattr(np_service, "read_previous_state", lambda: {})
 
-    track = np_service.TrackInfo(
-        source="apple_music",
-        state="playing",
-        title="Track",
-        artist="Artist",
-        album="Album",
-        artwork_path=str(source_artwork),
-        updated_at="now",
-    )
-    monkeypatch.setattr(np_service, "select_track", lambda source: track)
+    def make_track():
+        return np_service.TrackInfo(
+            source="apple_music",
+            state="playing",
+            title="Track",
+            artist="Artist",
+            album="Album",
+            artwork_path=str(source_artwork),
+            updated_at="now",
+        )
+
+    monkeypatch.setattr(np_service, "select_track", lambda source: make_track())
 
     obs_calls = []
     monkeypatch.setattr(np_service, "update_obs", lambda track, text: obs_calls.append((track.source, text)) or True)
@@ -258,10 +260,13 @@ def test_sync_updates_obs_only_when_track_changes(monkeypatch, tmp_path):
             "album": "Album",
             "year": None,
             "artwork_path": str(data_root / "current_artwork.png"),
-        }
+        },
+        "updated_at": "older-timestamp",
     })
     second = np_service.sync("auto", "")
     assert second["changed"] is False
+    assert second["json_changed"] is False
+    assert second["track"]["updated_at"] == "older-timestamp"
     assert obs_calls == [("apple_music", '"Track"\nArtist\nAlbum')]
 
 
@@ -335,3 +340,36 @@ def test_install_and_uninstall_service(monkeypatch, tmp_path, capsys):
     output = capsys.readouterr().out
     assert "Installed custom.label" in output
     assert "Removed custom.label" in output
+
+
+def test_install_service_tolerates_transient_bootstrap_failure(monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    logs_root = repo_root / "_logs"
+    data_root = repo_root / "_data"
+    launch_agents = tmp_path / "LaunchAgents"
+    plist_path = launch_agents / "custom.label.plist"
+
+    monkeypatch.setattr(np_service, "repo_dir", lambda: repo_root)
+    monkeypatch.setattr(np_service, "logs_dir", lambda: logs_root.mkdir(exist_ok=True) or logs_root)
+    monkeypatch.setattr(np_service, "data_dir", lambda: data_root.mkdir(exist_ok=True) or data_root)
+    monkeypatch.setattr(np_service, "launch_agent_path", lambda: plist_path)
+    monkeypatch.setattr(np_service, "launch_agent_label", lambda: "custom.label")
+    monkeypatch.setattr(np_service.os, "getuid", lambda: 501)
+    monkeypatch.setattr(np_service.time, "sleep", lambda _: None)
+
+    calls = []
+
+    def fake_run(command, check=False, **kwargs):
+        calls.append(command)
+        if command[:2] == ["launchctl", "bootstrap"]:
+            raise np_service.subprocess.CalledProcessError(5, command)
+        if command[:2] == ["launchctl", "print"]:
+            return SimpleNamespace(returncode=0)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(np_service.subprocess, "run", fake_run)
+
+    assert np_service.install_service() == 0
+    assert plist_path.exists()
+    assert any(command[:2] == ["launchctl", "print"] for command in calls)

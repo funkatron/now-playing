@@ -362,6 +362,9 @@ def sync(source: str, idle_text: str) -> dict:
     normalized_track["artwork_path"] = payload["artwork_path"]
 
     track_changed = previous.get("track") != normalized_track
+    if not track_changed and previous.get("updated_at"):
+        payload["updated_at"] = previous["updated_at"]
+
     obs_updated = False
     if track_changed or outputs["artwork_changed"]:
         obs_updated = update_obs(track, outputs["display_text"])
@@ -557,6 +560,16 @@ def init_config() -> int:
     return 0
 
 
+def service_is_loaded(label_ref: str) -> bool:
+    result = subprocess.run(
+        ["launchctl", "print", label_ref],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
+
+
 def install_service() -> int:
     logs_dir()
     data_dir()
@@ -578,7 +591,17 @@ def install_service() -> int:
     domain = f"gui/{os.getuid()}"
     label_ref = f"{domain}/{launch_agent_label()}"
     subprocess.run(["launchctl", "bootout", label_ref], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.run(["launchctl", "bootstrap", domain, str(launch_agent_path())], check=True)
+    subprocess.run(["launchctl", "bootout", domain, str(launch_agent_path())], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    try:
+        subprocess.run(["launchctl", "bootstrap", domain, str(launch_agent_path())], check=True)
+    except subprocess.CalledProcessError:
+        # launchctl can intermittently return exit 5 even when the agent is effectively loaded.
+        # If the service is not present after that failure, retry once against the fresh plist.
+        if not service_is_loaded(label_ref):
+            time.sleep(0.2)
+            subprocess.run(["launchctl", "bootstrap", domain, str(launch_agent_path())], check=True)
+
     subprocess.run(["launchctl", "enable", label_ref], check=True)
     subprocess.run(["launchctl", "kickstart", "-k", label_ref], check=True)
 
@@ -592,6 +615,7 @@ def uninstall_service() -> int:
     domain = f"gui/{os.getuid()}"
     label_ref = f"{domain}/{launch_agent_label()}"
     subprocess.run(["launchctl", "bootout", label_ref], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["launchctl", "bootout", domain, str(launch_agent_path())], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if launch_agent_path().exists():
         launch_agent_path().unlink()
     print(f"Removed {launch_agent_label()}")
