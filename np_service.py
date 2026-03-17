@@ -607,10 +607,11 @@ def main(argv: list[str]) -> int:
 
     command = args.command or "current"
     source, idle_text = current_settings(args)
+    output_format = getattr(args, "format", "json")
 
     if command == "current":
         track = select_track(source)
-        if args.format == "text":
+        if output_format == "text":
             print(track.to_text(idle_text))
         else:
             print(json.dumps(asdict(track), indent=2, sort_keys=True))

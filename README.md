@@ -67,6 +67,20 @@ Stop and remove it:
 uv run np uninstall-service
 ```
 
+## Smoke Test
+
+Run the local install smoke test:
+
+```bash
+python3 scripts/smoke_install.py
+```
+
+Also verify the `launchd` service and HTTP API:
+
+```bash
+python3 scripts/smoke_install.py --with-service
+```
+
 ## API
 
 Current state as JSON:
