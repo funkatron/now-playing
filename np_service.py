@@ -327,23 +327,20 @@ def update_obs(track: TrackInfo, display_text: str) -> bool:
 
 def materialize_outputs(track: TrackInfo, idle_text: str) -> dict:
     display_text = track.to_text(idle_text)
-    payload = asdict(track)
-    payload["text"] = display_text
-
-    text_changed = write_text_if_changed(current_song_file(), display_text)
-    json_changed = write_json_if_changed(current_track_json_file(), payload)
-
     artwork_changed = False
     if track.artwork_path:
         artwork_changed = copy_file_if_changed(Path(track.artwork_path), current_artwork_file())
         write_text_if_changed(artwork_manifest_file(), f"{current_artwork_file()}\n")
         track.artwork_path = str(current_artwork_file())
-        payload["artwork_path"] = track.artwork_path
-        if json_changed:
-            json_changed = write_json_if_changed(current_track_json_file(), payload) or json_changed
     else:
         artwork_changed = remove_file_if_exists(current_artwork_file()) or artwork_changed
         remove_file_if_exists(artwork_manifest_file())
+
+    payload = asdict(track)
+    payload["text"] = display_text
+
+    text_changed = write_text_if_changed(current_song_file(), display_text)
+    json_changed = write_json_if_changed(current_track_json_file(), payload)
 
     return {
         "payload": payload,

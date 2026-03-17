@@ -3,9 +3,6 @@
 set -euo pipefail
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-LABEL="${NOW_PLAYING_LAUNCHD_LABEL:-com.funkatron.now-playing}"
-PLIST_DIR="$HOME/Library/LaunchAgents"
-PLIST_PATH="$PLIST_DIR/$LABEL.plist"
 
 if [ -f "$DIR/config.env" ]; then
   set -a
@@ -13,6 +10,9 @@ if [ -f "$DIR/config.env" ]; then
   set +a
 fi
 
+LABEL="${NOW_PLAYING_LAUNCHD_LABEL:-com.funkatron.now-playing}"
+PLIST_DIR="$HOME/Library/LaunchAgents"
+PLIST_PATH="$PLIST_DIR/$LABEL.plist"
 HOST="${NOW_PLAYING_HOST:-127.0.0.1}"
 PORT="${NOW_PLAYING_PORT:-8976}"
 
