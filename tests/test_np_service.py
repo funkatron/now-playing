@@ -104,6 +104,29 @@ def test_track_info_text_and_fingerprint():
     }
 
 
+def test_is_playing_state_accepts_scriptingbridge_and_string_values():
+    assert np_service.is_playing_state(np_service.PLAYING_STATE_CODE) is True
+    assert np_service.is_playing_state("playing") is True
+    assert np_service.is_playing_state(" Playing ") is True
+    assert np_service.is_playing_state("paused") is False
+    assert np_service.is_playing_state(None) is False
+
+
+def test_spotify_snapshot_helpers():
+    snapshot = ["playing", "Song", "Artist", "Album", "https://example.com/cover.jpg"]
+
+    assert "tell application \"Spotify\"" in np_service.spotify_query_script()
+    assert np_service.spotify_state(snapshot) == "playing"
+    assert np_service.spotify_state([]) == "not_running"
+    assert np_service.spotify_track_fields(snapshot) == (
+        "Song",
+        "Artist",
+        "Album",
+        "https://example.com/cover.jpg",
+    )
+    assert np_service.spotify_track_fields(["playing"]) == ("", "", "", "")
+
+
 def test_file_helpers_round_trip(tmp_path):
     text_path = tmp_path / "value.txt"
     json_path = tmp_path / "value.json"
@@ -166,6 +189,25 @@ def test_select_track_auto_prefers_playing_sources(monkeypatch):
 
     with pytest.raises(np_service.ProviderError):
         np_service.select_track("bad-source")
+
+
+def test_get_spotify_track_uses_applescript_output(monkeypatch):
+    monkeypatch.setattr(
+        np_service,
+        "query_spotify_snapshot",
+        lambda: ["playing", "Song", "Artist", "Album", "https://example.com/cover.jpg"],
+    )
+    monkeypatch.setattr(np_service, "fetch_spotify_artwork", lambda *args: "/tmp/cover.jpg")
+    monkeypatch.setattr(np_service, "iso_now", lambda: "2026-03-19T17:45:00-04:00")
+
+    track = np_service.get_spotify_track()
+
+    assert track.source == "spotify"
+    assert track.state == "playing"
+    assert track.title == "Song"
+    assert track.artist == "Artist"
+    assert track.album == "Album"
+    assert track.artwork_path == "/tmp/cover.jpg"
 
 
 def test_update_obs_disabled(monkeypatch):
@@ -286,6 +328,12 @@ def test_request_handler_endpoints():
         health = json.loads(conn.getresponse().read().decode("utf-8"))
         assert health == {"status": "ok"}
 
+        conn.request("GET", "/")
+        dashboard = conn.getresponse().read().decode("utf-8")
+        assert "Now Playing" in dashboard
+        assert "EventSource" in dashboard
+        assert "/current_artwork.png" in dashboard
+
         conn.request("GET", "/current")
         current = json.loads(conn.getresponse().read().decode("utf-8"))
         assert current["source"] == "spotify"
@@ -296,6 +344,27 @@ def test_request_handler_endpoints():
         conn.request("GET", "/artwork")
         artwork = json.loads(conn.getresponse().read().decode("utf-8"))
         assert artwork == {"artwork_path": ""}
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_request_handler_artwork_file(monkeypatch, tmp_path):
+    artwork_path = tmp_path / "current_artwork.png"
+    artwork_path.write_bytes(b"png-bytes")
+    monkeypatch.setattr(np_service, "current_artwork_file", lambda: artwork_path)
+
+    server = np_service.NowPlayingHTTPServer(("127.0.0.1", 0), np_service.RequestHandler, lambda: {})
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        conn.request("GET", "/current_artwork.png")
+        response = conn.getresponse()
+        assert response.status == 200
+        assert response.getheader("Content-Type") == "image/png"
+        assert response.read() == b"png-bytes"
     finally:
         server.shutdown()
         server.server_close()
