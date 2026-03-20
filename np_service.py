@@ -567,7 +567,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/artwork":
-            self.respond_json({"artwork_path": payload.get("artwork_path", "")})
+            self.respond_json({"artwork_path": payload.get("artwork_path") or None})
             return
 
         if parsed.path == "/current_artwork.png":

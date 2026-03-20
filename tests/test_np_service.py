@@ -372,7 +372,7 @@ def test_request_handler_endpoints():
         "source": "spotify",
         "state": "idle",
         "text": "",
-        "artwork_path": "",
+        "artwork_path": None,
     }
     server = np_service.NowPlayingHTTPServer(("127.0.0.1", 0), np_service.RequestHandler, lambda: payload)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -398,7 +398,7 @@ def test_request_handler_endpoints():
 
         conn.request("GET", "/artwork")
         artwork = json.loads(conn.getresponse().read().decode("utf-8"))
-        assert artwork == {"artwork_path": ""}
+        assert artwork == {"artwork_path": None}
     finally:
         server.shutdown()
         server.server_close()

@@ -1,31 +1,67 @@
 # Now Playing
 
-This repo runs a small macOS background service that polls Apple Music or Spotify, writes flat files for OBS-friendly consumption, and exposes a local HTTP API on `127.0.0.1`.
+This repo runs a small macOS now-playing service. It polls Apple Music or Spotify, keeps local outputs up to date, and exposes the current state over HTTP on `127.0.0.1`.
 
-## Outputs
+Out of the box, it provides:
+
+- **flat-file output** that works well with OBS and other local consumers
+- optional **OBS websocket push** for text and artwork updates
+- a **local HTTP API** plus a simple **browser viewer**
+- support for both **Apple Music** and **Spotify**, with **auto-detection** of the active provider
+
+## Start Here
+
+Install dependencies and create a local config file:
+
+```bash
+brew install uv
+uv sync
+uv run np init-config
+```
+
+Run the service in the foreground and open the local viewer:
+
+```bash
+uv run np serve
+open http://127.0.0.1:8976/
+```
+
+Install the per-user background service:
+
+```bash
+uv run np install-service
+uv run np status
+open http://127.0.0.1:8976/
+```
+
+Notes:
+
+- Bare `uv run np` defaults to `current --format json`.
+- Global flags such as `--source` and `--idle-text` go before the subcommand.
+- Example: `uv run np --source apple_music current --format text`
+- `install-service` leaves the background service installed and running until you explicitly stop or remove it.
+- `uninstall-service` stops the background service and removes the installed LaunchAgent plist from `~/Library/LaunchAgents/`.
+
+The service reads [`config.env`](/Users/coj/src/now-playing/config.env) automatically if it exists. Start with [`config.env.example`](/Users/coj/src/now-playing/config.env.example) and only change what you actually need.
+
+## Outputs And Endpoints
+
+The service writes the following files to `_data/`:
 
 - `_data/current_song.txt`
 - `_data/current_track.json`
 - `_data/current_artwork.png`
 - `_data/now_playing_artworks.txt`
-- `http://127.0.0.1:8976/`
-- `http://127.0.0.1:8976/current`
-- `http://127.0.0.1:8976/current.txt`
-- `http://127.0.0.1:8976/artwork`
-- `http://127.0.0.1:8976/current_artwork.png`
-- `http://127.0.0.1:8976/events`
-- `http://127.0.0.1:8976/health`
 
-Text output format:
+The HTTP API provides the following endpoints:
 
-```text
-"<song name>"
-<artist name>
-<album name>
-<year if available>
-```
-
-If nothing is playing, the text output is empty by default. Set `NOW_PLAYING_IDLE_TEXT` if you want different idle text.
+- `GET /current` - current state as JSON
+- `GET /current.txt` - current state as text (4-line rendered view)
+- `GET /artwork` - current artwork path as JSON, or `null` if there is no artwork
+- `GET /current_artwork.png` - current artwork file
+- `GET /events` - server-sent events stream for live updates
+- `GET /health` - health check
+- `GET /` - browser viewer
 
 ## Requirements
 
@@ -34,84 +70,41 @@ If nothing is playing, the text output is empty by default. Set `NOW_PLAYING_IDL
 - Apple Music and/or Spotify installed
 - OBS only if you want websocket-driven updates
 
-## Install
+## Foreground And Background
 
-```bash
-brew install uv
-uv sync
-uv run np init-config
-```
-
-Then edit `config.env` if you want Spotify-only mode or OBS websocket pushes.
-
-## Quick Start
-
-Run a single sync:
+Run one sync pass:
 
 ```bash
 uv run np sync
 ```
 
-Run the daemon in the foreground:
+Run the service in the foreground:
 
 ```bash
 uv run np serve
 ```
 
-Install the background service with `launchd`:
+Manage the installed background service:
 
 ```bash
 uv run np install-service
-```
-
-Stop and remove it:
-
-```bash
-uv run np uninstall-service
-```
-
-Check status:
-
-```bash
+uv run np start-service
+uv run np stop-service
+uv run np restart-service
 uv run np status
-```
-
-Show recent service logs:
-
-```bash
 uv run np tail
-```
-
-Notes:
-
-- Bare `uv run np` defaults to `current --format json`.
-- Global flags such as `--source` and `--idle-text` go before the subcommand.
-- Example: `uv run np --source apple_music current --format text`
-- `install-service` leaves the background service installed and running until you explicitly remove it with `uv run np uninstall-service`.
-- If `uv run np serve` reports `Address already in use`, stop the installed service first with `uv run np uninstall-service`, or run the foreground server on a different port.
-
-## Local Viewer
-
-If you want to start the service and immediately see the current text and artwork in a browser:
-
-```bash
-uv run np serve
-open http://127.0.0.1:8976/
-```
-
-Or with the background service:
-
-```bash
-uv run np install-service
-open http://127.0.0.1:8976/
-```
-
-The viewer is intentionally simple. It subscribes to `/events` with server-sent events, so text and artwork updates are pushed from the backend when the state changes instead of the browser polling `/current` on a timer.
-
-If provider detection looks wrong, the foreground viewer is the easiest way to debug it:
-
-```bash
+uv run np tail --follow
 uv run np uninstall-service
+```
+
+The browser viewer is intentionally simple. It subscribes to `/events` with server-sent events, so text and artwork updates are pushed from the backend instead of the page polling `/current` on a timer.
+
+Debugging notes:
+- If `uv run np serve` reports `Address already in use`, stop the installed service first with `uv run np stop-service` or `uv run np uninstall-service`, or run the foreground server on a different port.
+- If provider detection looks wrong, the foreground viewer is the easiest way to debug it:
+
+```bash
+uv run np stop-service
 uv run np serve
 open http://127.0.0.1:8976/
 ```
@@ -170,6 +163,8 @@ Browser viewer:
 open http://127.0.0.1:8976/
 ```
 
+`/current` is the machine-facing JSON endpoint. `/` is the human-facing viewer.
+
 ## OBS
 
 The safest OBS setup is file-based:
@@ -226,7 +221,7 @@ Available environment variables:
 - `NOW_PLAYING_LAUNCHD_LABEL=com.funkatron.now-playing`
   Per-user launchd label written into `~/Library/LaunchAgents/`.
 
-The easiest way to manage those is in `config.env`, which the Python CLI loads automatically.
+The easiest way to manage these is in `config.env`, which the Python CLI loads automatically.
 
 ## Commands
 
