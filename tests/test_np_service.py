@@ -497,3 +497,74 @@ def test_install_service_tolerates_transient_bootstrap_failure(monkeypatch, tmp_
     assert np_service.install_service() == 0
     assert plist_path.exists()
     assert any(command[:2] == ["launchctl", "print"] for command in calls)
+
+
+def test_service_status_reports_install_and_runtime_state(monkeypatch, tmp_path, capsys):
+    plist_path = tmp_path / "com.funkatron.now-playing.plist"
+    plist_path.write_text("plist")
+    log_path = tmp_path / "launchd.log"
+
+    monkeypatch.setattr(np_service, "launch_agent_path", lambda: plist_path)
+    monkeypatch.setattr(np_service, "launch_agent_label", lambda: "com.funkatron.now-playing")
+    monkeypatch.setattr(np_service, "logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(np_service, "service_is_loaded", lambda _label_ref: True)
+    monkeypatch.setattr(np_service, "service_pid", lambda _label_ref: 12345)
+    monkeypatch.setenv("NOW_PLAYING_HOST", "127.0.0.1")
+    monkeypatch.setenv("NOW_PLAYING_PORT", "8976")
+
+    assert np_service.service_status() == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["installed"] is True
+    assert payload["loaded"] is True
+    assert payload["running"] is True
+    assert payload["pid"] == 12345
+    assert payload["url"] == "http://127.0.0.1:8976/"
+
+
+def test_tail_service_log_prints_recent_lines(monkeypatch, tmp_path, capsys):
+    log_path = tmp_path / "launchd.log"
+    log_path.write_text("one\ntwo\nthree\n")
+    monkeypatch.setattr(np_service, "logs_dir", lambda: tmp_path)
+
+    assert np_service.tail_service_log(lines=2, follow=False) == 0
+    assert capsys.readouterr().out == "two\nthree\n"
+
+
+def test_start_stop_and_restart_service(monkeypatch, tmp_path, capsys):
+    plist_path = tmp_path / "com.funkatron.now-playing.plist"
+    plist_path.write_text("plist")
+
+    monkeypatch.setattr(np_service, "launch_agent_path", lambda: plist_path)
+    monkeypatch.setattr(np_service, "launch_agent_label", lambda: "com.funkatron.now-playing")
+    monkeypatch.setattr(np_service, "launchctl_domain", lambda: "gui/501")
+    monkeypatch.setattr(np_service, "launchctl_label_ref", lambda: "gui/501/com.funkatron.now-playing")
+    monkeypatch.setattr(np_service, "service_http_url", lambda: "http://127.0.0.1:8976/")
+
+    calls = []
+    loaded_state = {"loaded": False}
+
+    def fake_service_is_loaded(_label_ref):
+        return loaded_state["loaded"]
+
+    def fake_run(command, check=False, **kwargs):
+        calls.append(command)
+        if command[:2] == ["launchctl", "bootstrap"]:
+            loaded_state["loaded"] = True
+        if command[:2] == ["launchctl", "bootout"]:
+            loaded_state["loaded"] = False
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(np_service, "service_is_loaded", fake_service_is_loaded)
+    monkeypatch.setattr(np_service.subprocess, "run", fake_run)
+
+    assert np_service.start_service() == 0
+    assert np_service.restart_service() == 0
+    assert np_service.stop_service() == 0
+
+    output = capsys.readouterr().out
+    assert "Started com.funkatron.now-playing" in output
+    assert "Stopped com.funkatron.now-playing" in output
+    assert any(command[:2] == ["launchctl", "bootstrap"] for command in calls)
+    assert any(command[:2] == ["launchctl", "kickstart"] for command in calls)
+    assert any(command[:2] == ["launchctl", "bootout"] for command in calls)

@@ -1110,6 +1110,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("init-config", help="Create config.env from config.env.example if missing")
     subparsers.add_parser("install-service", help="Install and start the launchd service")
+    subparsers.add_parser("start-service", help="Start the installed launchd service")
+    subparsers.add_parser("stop-service", help="Stop the installed launchd service without removing it")
+    subparsers.add_parser("restart-service", help="Restart the installed launchd service")
+    subparsers.add_parser("status", help="Show launchd service status")
+    tail_parser = subparsers.add_parser("tail", help="Show the launchd log")
+    tail_parser.add_argument("--lines", type=int, default=40, help="Number of log lines to show")
+    tail_parser.add_argument("--follow", action="store_true", help="Follow the log output")
     subparsers.add_parser("uninstall-service", help="Stop and remove the launchd service")
 
     return parser
@@ -1169,6 +1176,139 @@ def service_is_loaded(label_ref: str) -> bool:
     return result.returncode == 0
 
 
+def launchctl_domain() -> str:
+    return f"gui/{os.getuid()}"
+
+
+def launchctl_label_ref() -> str:
+    return f"{launchctl_domain()}/{launch_agent_label()}"
+
+
+def service_is_installed() -> bool:
+    return launch_agent_path().exists()
+
+
+def launchctl_print_lines(label_ref: str) -> list[str]:
+    result = subprocess.run(
+        ["launchctl", "print", label_ref],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return []
+    return result.stdout.splitlines()
+
+
+def service_pid(label_ref: str) -> Optional[int]:
+    for line in launchctl_print_lines(label_ref):
+        stripped = line.strip()
+        if stripped.startswith("pid = "):
+            value = stripped.removeprefix("pid = ").strip()
+            try:
+                return int(value)
+            except ValueError:
+                return None
+    return None
+
+
+def service_http_url() -> str:
+    host = os.environ.get("NOW_PLAYING_HOST", "127.0.0.1")
+    port = os.environ.get("NOW_PLAYING_PORT", "8976")
+    return f"http://{host}:{port}/"
+
+
+def start_service() -> int:
+    if not service_is_installed():
+        print(f"LaunchAgent is not installed: {launch_agent_path()}")
+        print("Run `uv run np install-service` first.")
+        return 1
+
+    label_ref = launchctl_label_ref()
+    domain = launchctl_domain()
+    if not service_is_loaded(label_ref):
+        subprocess.run(["launchctl", "bootstrap", domain, str(launch_agent_path())], check=True)
+
+    subprocess.run(["launchctl", "enable", label_ref], check=True)
+    subprocess.run(["launchctl", "kickstart", "-k", label_ref], check=True)
+    print(f"Started {launch_agent_label()} at {service_http_url()}")
+    return 0
+
+
+def stop_service() -> int:
+    label_ref = launchctl_label_ref()
+    domain = launchctl_domain()
+    if service_is_loaded(label_ref):
+        subprocess.run(["launchctl", "bootout", label_ref], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["launchctl", "bootout", domain, str(launch_agent_path())], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"Stopped {launch_agent_label()}")
+        return 0
+
+    if service_is_installed():
+        print(f"{launch_agent_label()} is not running")
+        return 0
+
+    print(f"LaunchAgent is not installed: {launch_agent_path()}")
+    return 1
+
+
+def restart_service() -> int:
+    if not service_is_installed():
+        print(f"LaunchAgent is not installed: {launch_agent_path()}")
+        print("Run `uv run np install-service` first.")
+        return 1
+
+    stop_service()
+    return start_service()
+
+
+def service_status() -> int:
+    label_ref = launchctl_label_ref()
+    installed = service_is_installed()
+    loaded = service_is_loaded(label_ref)
+    pid = service_pid(label_ref) if loaded else None
+
+    payload = {
+        "label": launch_agent_label(),
+        "installed": installed,
+        "loaded": loaded,
+        "running": pid is not None,
+        "pid": pid,
+        "plist_path": str(launch_agent_path()),
+        "log_path": str(logs_dir() / "launchd.log"),
+        "url": service_http_url(),
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0 if installed else 1
+
+
+def tail_service_log(lines: int, follow: bool) -> int:
+    log_path = logs_dir() / "launchd.log"
+    if not log_path.exists():
+        print(f"Log file does not exist yet: {log_path}")
+        return 1
+
+    content = log_path.read_text().splitlines()
+    tail_lines = content[-max(lines, 0):] if lines else content
+    if tail_lines:
+        print("\n".join(tail_lines))
+
+    if not follow:
+        return 0
+
+    with log_path.open("r") as handle:
+        handle.seek(0, os.SEEK_END)
+        try:
+            while True:
+                line = handle.readline()
+                if line:
+                    print(line, end="")
+                else:
+                    time.sleep(0.5)
+        except KeyboardInterrupt:
+            return 0
+
+
 def install_service() -> int:
     logs_dir()
     data_dir()
@@ -1187,8 +1327,8 @@ def install_service() -> int:
 
     launch_agent_path().write_bytes(plistlib.dumps(plist_payload))
 
-    domain = f"gui/{os.getuid()}"
-    label_ref = f"{domain}/{launch_agent_label()}"
+    domain = launchctl_domain()
+    label_ref = launchctl_label_ref()
     subprocess.run(["launchctl", "bootout", label_ref], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["launchctl", "bootout", domain, str(launch_agent_path())], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -1204,15 +1344,13 @@ def install_service() -> int:
     subprocess.run(["launchctl", "enable", label_ref], check=True)
     subprocess.run(["launchctl", "kickstart", "-k", label_ref], check=True)
 
-    host = os.environ.get("NOW_PLAYING_HOST", "127.0.0.1")
-    port = os.environ.get("NOW_PLAYING_PORT", "8976")
-    print(f"Installed {launch_agent_label()} and started http://{host}:{port}/current")
+    print(f"Installed {launch_agent_label()} and started {service_http_url()}")
     return 0
 
 
 def uninstall_service() -> int:
-    domain = f"gui/{os.getuid()}"
-    label_ref = f"{domain}/{launch_agent_label()}"
+    domain = launchctl_domain()
+    label_ref = launchctl_label_ref()
     subprocess.run(["launchctl", "bootout", label_ref], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["launchctl", "bootout", domain, str(launch_agent_path())], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if launch_agent_path().exists():
@@ -1266,6 +1404,21 @@ def main(argv: list[str]) -> int:
 
     if command == "install-service":
         return install_service()
+
+    if command == "start-service":
+        return start_service()
+
+    if command == "stop-service":
+        return stop_service()
+
+    if command == "restart-service":
+        return restart_service()
+
+    if command == "status":
+        return service_status()
+
+    if command == "tail":
+        return tail_service_log(args.lines, args.follow)
 
     if command == "uninstall-service":
         return uninstall_service()

@@ -70,11 +70,25 @@ Stop and remove it:
 uv run np uninstall-service
 ```
 
+Check status:
+
+```bash
+uv run np status
+```
+
+Show recent service logs:
+
+```bash
+uv run np tail
+```
+
 Notes:
 
 - Bare `uv run np` defaults to `current --format json`.
 - Global flags such as `--source` and `--idle-text` go before the subcommand.
 - Example: `uv run np --source apple_music current --format text`
+- `install-service` leaves the background service installed and running until you explicitly remove it with `uv run np uninstall-service`.
+- If `uv run np serve` reports `Address already in use`, stop the installed service first with `uv run np uninstall-service`, or run the foreground server on a different port.
 
 ## Local Viewer
 
@@ -93,6 +107,16 @@ open http://127.0.0.1:8976/
 ```
 
 The viewer is intentionally simple. It subscribes to `/events` with server-sent events, so text and artwork updates are pushed from the backend when the state changes instead of the browser polling `/current` on a timer.
+
+If provider detection looks wrong, the foreground viewer is the easiest way to debug it:
+
+```bash
+uv run np uninstall-service
+uv run np serve
+open http://127.0.0.1:8976/
+```
+
+That keeps the service attached to your terminal so Python exceptions and provider issues are visible immediately.
 
 ## Smoke Test
 
@@ -221,6 +245,12 @@ uv run np artwork
 uv run np sync
 uv run np serve
 uv run np install-service
+uv run np start-service
+uv run np stop-service
+uv run np restart-service
+uv run np status
+uv run np tail
+uv run np tail --follow
 uv run np uninstall-service
 ```
 
@@ -238,6 +268,16 @@ uv run np uninstall-service
   Creates `config.env` from `config.env.example` if it does not already exist.
 - `install-service`
   Writes the per-user LaunchAgent plist, reloads the service, and leaves it running in the background.
+- `start-service`
+  Starts the installed LaunchAgent without rewriting the plist.
+- `stop-service`
+  Stops the installed LaunchAgent without removing the plist from `~/Library/LaunchAgents/`.
+- `restart-service`
+  Stops and starts the installed LaunchAgent in place.
+- `status`
+  Prints JSON describing whether the LaunchAgent is installed, loaded, and currently running, plus the plist path, log path, and local viewer URL.
+- `tail`
+  Prints the recent `launchd` log output. Use `--follow` to stream it until you press `Ctrl-C`.
 - `uninstall-service`
   Stops the per-user LaunchAgent and removes the installed plist.
 
@@ -249,5 +289,8 @@ uv run np --source apple_music current --format text
 uv run np --source spotify sync
 uv run np serve --host 127.0.0.1 --port 8976 --interval-seconds 2
 uv run np install-service
+uv run np status
+uv run np tail --follow
+uv run np restart-service
 curl http://127.0.0.1:8976/current
 ```
