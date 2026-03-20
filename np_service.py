@@ -212,11 +212,27 @@ def extract_apple_music_artwork(track) -> str:
     cache_path = cache_dir / f"{cache_name}.png"
 
     first_artwork = artworks[0]
-    if not first_artwork.data():
+    artwork_data = first_artwork.data()
+    if not artwork_data:
         return ""
 
-    bitmap_rep = NSBitmapImageRep.imageRepWithData_(first_artwork.data().TIFFRepresentation())
+    if hasattr(artwork_data, "TIFFRepresentation"):
+        raw_data = artwork_data.TIFFRepresentation()
+    elif hasattr(artwork_data, "NSRepresentation"):
+        raw_data = artwork_data.NSRepresentation()
+    else:
+        raw_data = artwork_data
+
+    bitmap_rep = NSBitmapImageRep.imageRepWithData_(raw_data)
+    if bitmap_rep is None:
+        LOGGER.debug("Apple Music artwork data could not be converted to NSBitmapImageRep.")
+        return ""
+
     png_data = bitmap_rep.representationUsingType_properties_(NSPNGFileType, None)
+    if png_data is None:
+        LOGGER.debug("Apple Music artwork data could not be converted to PNG.")
+        return ""
+
     png_data.writeToFile_atomically_(str(cache_path), True)
     return str(cache_path)
 

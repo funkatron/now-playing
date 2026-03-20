@@ -80,6 +80,61 @@ def test_materialize_outputs_uses_stable_artwork_path(monkeypatch, tmp_path):
     assert second["json_changed"] is False
 
 
+def test_extract_apple_music_artwork_accepts_nsrepresentation(monkeypatch, tmp_path):
+    written_paths = []
+
+    class FakePNGData:
+        def writeToFile_atomically_(self, dest, _flag):
+            Path(dest).write_bytes(b"png")
+            written_paths.append(dest)
+
+    class FakeBitmap:
+        @classmethod
+        def imageRepWithData_(cls, data):
+            assert data == b"descriptor-bytes"
+            return cls()
+
+        def representationUsingType_properties_(self, _file_type, _props):
+            return FakePNGData()
+
+    class FakeArtworkData:
+        def NSRepresentation(self):
+            return b"descriptor-bytes"
+
+    class FakeArtwork:
+        def data(self):
+            return FakeArtworkData()
+
+    class FakeTrack:
+        def artworks(self):
+            return [FakeArtwork()]
+
+        def databaseID(self):
+            return 42
+
+        def artist(self):
+            return "Artist"
+
+        def album(self):
+            return "Album"
+
+        def name(self):
+            return "Song"
+
+    monkeypatch.setattr(np_service.Path, "home", lambda: tmp_path)
+    monkeypatch.setitem(
+        np_service.sys.modules,
+        "AppKit",
+        SimpleNamespace(NSBitmapImageRep=FakeBitmap, NSPNGFileType=object()),
+    )
+
+    result = np_service.extract_apple_music_artwork(FakeTrack())
+
+    assert result.endswith("42_Artist_Album_Song.png")
+    assert Path(result).exists()
+    assert written_paths == [result]
+
+
 def test_track_info_text_and_fingerprint():
     track = np_service.TrackInfo(
         source="apple_music",
