@@ -41,6 +41,8 @@ Notes:
 - Example: `uv run np --source apple_music current --format text`
 - `install-service` leaves the background service installed and running until you explicitly stop or remove it.
 - `uninstall-service` stops the background service and removes the installed LaunchAgent plist from `~/Library/LaunchAgents/`.
+- Apple Music is the strongest fit for the installed background service.
+- Spotify desktop detection is more reliable in an interactive terminal session than in the background LaunchAgent path.
 
 The service reads [`config.env`](/Users/coj/src/now-playing/config.env) automatically if it exists. Start with [`config.env.example`](/Users/coj/src/now-playing/config.env.example) and only change what you actually need.
 
@@ -96,6 +98,15 @@ uv run np tail
 uv run np tail --follow
 uv run np uninstall-service
 ```
+
+If you want Spotify in the old-style interactive context, use:
+
+```bash
+uv run np start-spotify-session
+uv run np stop-spotify-session
+```
+
+That launches a Spotify-pinned service inside Terminal or iTerm instead of through `launchd`.
 
 The browser viewer is intentionally simple. It subscribes to `/events` with server-sent events, so text and artwork updates are pushed from the backend instead of the page polling `/current` on a timer.
 
@@ -239,6 +250,8 @@ uv run np current --format text
 uv run np artwork
 uv run np sync
 uv run np serve
+uv run np start-spotify-session
+uv run np stop-spotify-session
 uv run np install-service
 uv run np start-service
 uv run np stop-service
@@ -273,6 +286,10 @@ uv run np uninstall-service
   Prints JSON describing whether the LaunchAgent is installed, loaded, and currently running, plus the plist path, log path, and local viewer URL.
 - `tail`
   Prints the recent `launchd` log output. Use `--follow` to stream it until you press `Ctrl-C`.
+- `start-spotify-session`
+  Launches a Spotify-pinned service inside Terminal or iTerm. Use this when Spotify works interactively but not from the background LaunchAgent.
+- `stop-spotify-session`
+  Stops the Spotify terminal session if one is running.
 - `uninstall-service`
   Stops the per-user LaunchAgent and removes the installed plist.
 
@@ -287,5 +304,6 @@ uv run np install-service
 uv run np status
 uv run np tail --follow
 uv run np restart-service
+uv run np start-spotify-session
 curl http://127.0.0.1:8976/current
 ```

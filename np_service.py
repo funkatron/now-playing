@@ -6,6 +6,7 @@ import logging
 import os
 import plistlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -56,6 +57,24 @@ class TrackInfo:
             "album": self.album,
             "year": self.year,
             "artwork_path": self.artwork_path,
+        }
+
+
+@dataclass
+class ProviderSnapshot:
+    source: str
+    state: str
+    detail: str = ""
+    error: Optional[str] = None
+    updated_at: str = ""
+
+    def to_payload(self) -> dict:
+        return {
+            "source": self.source,
+            "state": self.state,
+            "detail": self.detail,
+            "error": self.error,
+            "updated_at": self.updated_at,
         }
 
 
@@ -115,6 +134,10 @@ def artwork_manifest_file() -> Path:
 
 def current_artwork_file() -> Path:
     return data_dir() / "current_artwork.png"
+
+
+def spotify_session_pid_file() -> Path:
+    return data_dir() / "spotify-session.pid"
 
 
 def write_text_if_changed(path: Path, content: str) -> bool:
@@ -367,26 +390,83 @@ def get_spotify_track() -> TrackInfo:
     )
 
 
-def select_track(source: str) -> TrackInfo:
+def provider_snapshot(track: TrackInfo, detail: str = "", error: Optional[str] = None) -> ProviderSnapshot:
+    return ProviderSnapshot(
+        source=track.source,
+        state=track.state,
+        detail=detail,
+        error=error,
+        updated_at=track.updated_at,
+    )
+
+
+def inspect_provider(source: str) -> tuple[TrackInfo, ProviderSnapshot]:
+    try:
+        if source == "apple_music":
+            track = get_apple_music_track()
+            detail = "Apple Music automation"
+        elif source == "spotify":
+            track = get_spotify_track()
+            detail = "Spotify AppleScript"
+        else:
+            raise ProviderError(f"Unsupported source: {source}")
+    except Exception as exc:
+        LOGGER.exception("Provider %s failed", source)
+        track = TrackInfo(source=source, state="error", updated_at=iso_now())
+        return track, provider_snapshot(track, error=str(exc))
+
+    if track.state == "playing":
+        now_playing = " / ".join(part for part in [track.title, track.artist, track.album] if part)
+        detail = now_playing or detail
+    snapshot = provider_snapshot(track, detail=detail)
+    LOGGER.debug(
+        "Provider %s state=%s detail=%s error=%s",
+        source,
+        snapshot.state,
+        snapshot.detail,
+        snapshot.error,
+    )
+    return track, snapshot
+
+
+def select_track_with_diagnostics(source: str) -> tuple[TrackInfo, dict]:
     if source == "apple_music":
-        return get_apple_music_track()
+        track, snapshot = inspect_provider("apple_music")
+        return track, {"apple_music": snapshot.to_payload()}
     if source == "spotify":
-        return get_spotify_track()
+        track, snapshot = inspect_provider("spotify")
+        return track, {"spotify": snapshot.to_payload()}
     if source != "auto":
         raise ProviderError(f"Unsupported source: {source}")
 
-    apple_track = get_apple_music_track()
+    apple_track, apple_snapshot = inspect_provider("apple_music")
     if apple_track.state == "playing":
-        return apple_track
+        return apple_track, {
+            "apple_music": apple_snapshot.to_payload(),
+            "spotify": inspect_provider("spotify")[1].to_payload(),
+        }
 
-    spotify_track = get_spotify_track()
+    spotify_track, spotify_snapshot = inspect_provider("spotify")
     if spotify_track.state == "playing":
-        return spotify_track
+        return spotify_track, {
+            "apple_music": apple_snapshot.to_payload(),
+            "spotify": spotify_snapshot.to_payload(),
+        }
 
     if apple_track.state != "not_running":
-        return apple_track
+        return apple_track, {
+            "apple_music": apple_snapshot.to_payload(),
+            "spotify": spotify_snapshot.to_payload(),
+        }
 
-    return spotify_track
+    return spotify_track, {
+        "apple_music": apple_snapshot.to_payload(),
+        "spotify": spotify_snapshot.to_payload(),
+    }
+
+
+def select_track(source: str) -> TrackInfo:
+    return select_track_with_diagnostics(source)[0]
 
 
 def obs_enabled() -> bool:
@@ -447,23 +527,22 @@ def materialize_outputs(track: TrackInfo, idle_text: str) -> dict:
     payload["text"] = display_text
 
     text_changed = write_text_if_changed(current_song_file(), display_text)
-    json_changed = write_json_if_changed(current_track_json_file(), payload)
 
     return {
         "payload": payload,
         "display_text": display_text,
         "text_changed": text_changed,
-        "json_changed": json_changed,
         "artwork_changed": artwork_changed,
     }
 
 
 def sync(source: str, idle_text: str) -> dict:
-    track = select_track(source)
+    track, providers = select_track_with_diagnostics(source)
     previous = read_previous_state()
 
     outputs = materialize_outputs(track, idle_text)
     payload = outputs["payload"]
+    payload["providers"] = providers
 
     normalized_track = dict(track.fingerprint())
     normalized_track["artwork_path"] = payload["artwork_path"]
@@ -471,6 +550,8 @@ def sync(source: str, idle_text: str) -> dict:
     track_changed = previous.get("track") != normalized_track
     if not track_changed and previous.get("updated_at"):
         payload["updated_at"] = previous["updated_at"]
+
+    json_changed = write_json_if_changed(current_track_json_file(), payload)
 
     obs_updated = False
     if track_changed or outputs["artwork_changed"]:
@@ -481,6 +562,7 @@ def sync(source: str, idle_text: str) -> dict:
             "track": normalized_track,
             "artwork_path": payload["artwork_path"],
             "updated_at": payload["updated_at"],
+            "providers": providers,
         }
     )
 
@@ -488,7 +570,7 @@ def sync(source: str, idle_text: str) -> dict:
         "track": payload,
         "changed": track_changed,
         "text_changed": outputs["text_changed"],
-        "json_changed": outputs["json_changed"],
+        "json_changed": json_changed,
         "artwork_changed": outputs["artwork_changed"],
         "obs_updated": obs_updated,
     }
@@ -857,6 +939,43 @@ class RequestHandler(BaseHTTPRequestHandler):
       font-size: 12px;
       letter-spacing: 0.06em;
     }
+    .providers {
+      display: grid;
+      gap: 10px;
+      margin-top: 18px;
+    }
+    .provider-card {
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .provider-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      margin-bottom: 6px;
+    }
+    .provider-name {
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      font-size: 11px;
+    }
+    .provider-state {
+      color: var(--text);
+      font-size: 13px;
+      text-transform: uppercase;
+    }
+    .provider-detail {
+      color: var(--soft);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .provider-error {
+      color: #ffb4a5;
+    }
     @media (max-width: 960px) {
       .grid {
         grid-template-columns: 1fr;
@@ -921,6 +1040,7 @@ class RequestHandler(BaseHTTPRequestHandler):
               <span id="updated-at" class="detail-value">never</span>
             </div>
           </div>
+          <div id="providers" class="providers"></div>
           <div class="footer-note">Live local feed for stream overlays, OBS, and operator checks.</div>
         </section>
       </div>
@@ -934,13 +1054,44 @@ class RequestHandler(BaseHTTPRequestHandler):
     const updatedAtEl = document.getElementById("updated-at");
     const artworkImageEl = document.getElementById("artwork-image");
     const artworkEmptyEl = document.getElementById("artwork-empty");
+    const providersEl = document.getElementById("providers");
     let lastArtworkVersion = "";
+
+    function formatProviderName(name) {
+      if (name === "apple_music") return "Apple Music";
+      if (name === "spotify") return "Spotify";
+      return name || "Unknown";
+    }
+
+    function renderProviders(payload) {
+      const providers = payload.providers || {};
+      const entries = Object.entries(providers);
+      if (!entries.length) {
+        providersEl.innerHTML = "";
+        return;
+      }
+
+      providersEl.innerHTML = entries.map(([name, info]) => {
+        const detailClass = info.error ? "provider-detail provider-error" : "provider-detail";
+        const detail = info.error || info.detail || "No additional detail";
+        return `
+          <div class="provider-card">
+            <div class="provider-head">
+              <span class="provider-name">${formatProviderName(name)}</span>
+              <span class="provider-state">${info.state || "unknown"}</span>
+            </div>
+            <div class="${detailClass}">${detail}</div>
+          </div>
+        `;
+      }).join("");
+    }
 
     function render(payload) {
       sourceEl.textContent = payload.source || "unknown";
       updatedAtEl.textContent = payload.updated_at || "never";
       statusEl.textContent = payload.state || "unknown";
       statusEl.className = "status state-" + (payload.state || "unknown");
+      renderProviders(payload);
 
       if (payload.state === "playing" && payload.title) {
         titleEl.textContent = payload.title;
@@ -1108,6 +1259,35 @@ def build_parser() -> argparse.ArgumentParser:
         default=float(os.environ.get("INTERVAL_SECONDS", "5")),
     )
 
+    spotify_session_parser = subparsers.add_parser(
+        "start-spotify-session",
+        help="Launch a Spotify-pinned service in Terminal or iTerm",
+    )
+    spotify_session_parser.add_argument("--host", default=os.environ.get("NOW_PLAYING_HOST", "127.0.0.1"))
+    spotify_session_parser.add_argument("--port", type=int, default=int(os.environ.get("NOW_PLAYING_PORT", "8976")))
+    spotify_session_parser.add_argument(
+        "--interval-seconds",
+        type=float,
+        default=float(os.environ.get("INTERVAL_SECONDS", "5")),
+    )
+    spotify_session_parser.add_argument(
+        "--terminal",
+        choices=["auto", "iterm", "terminal"],
+        default=os.environ.get("NOW_PLAYING_SPOTIFY_TERMINAL", "auto"),
+    )
+    hidden_spotify_parser = subparsers.add_parser(
+        "spotify-session-serve",
+        help="Internal: run the Spotify terminal session server",
+    )
+    hidden_spotify_parser.add_argument("--host", default=os.environ.get("NOW_PLAYING_HOST", "127.0.0.1"))
+    hidden_spotify_parser.add_argument("--port", type=int, default=int(os.environ.get("NOW_PLAYING_PORT", "8976")))
+    hidden_spotify_parser.add_argument(
+        "--interval-seconds",
+        type=float,
+        default=float(os.environ.get("INTERVAL_SECONDS", "5")),
+    )
+    subparsers.add_parser("stop-spotify-session", help="Stop the Spotify terminal session if it is running")
+
     subparsers.add_parser("init-config", help="Create config.env from config.env.example if missing")
     subparsers.add_parser("install-service", help="Install and start the launchd service")
     subparsers.add_parser("start-service", help="Start the installed launchd service")
@@ -1216,6 +1396,122 @@ def service_http_url() -> str:
     host = os.environ.get("NOW_PLAYING_HOST", "127.0.0.1")
     port = os.environ.get("NOW_PLAYING_PORT", "8976")
     return f"http://{host}:{port}/"
+
+
+def spotify_session_is_running() -> bool:
+    pid_path = spotify_session_pid_file()
+    if not pid_path.exists():
+        return False
+    try:
+        pid = int(pid_path.read_text().strip())
+        os.kill(pid, 0)
+        return True
+    except (ValueError, OSError):
+        remove_file_if_exists(pid_path)
+        return False
+
+
+def detect_terminal_app(preference: str) -> str:
+    if preference in {"iterm", "terminal"}:
+        return preference
+
+    if Path("/Applications/iTerm.app").exists():
+        return "iterm"
+    return "terminal"
+
+
+def spotify_session_command(host: str, port: int, interval_seconds: float) -> str:
+    return " ".join(
+        [
+            "cd",
+            shlex.quote(str(repo_dir())),
+            "&&",
+            "uv",
+            "run",
+            "np",
+            "spotify-session-serve",
+            "--host",
+            shlex.quote(host),
+            "--port",
+            shlex.quote(str(port)),
+            "--interval-seconds",
+            shlex.quote(str(interval_seconds)),
+        ]
+    )
+
+
+def launch_terminal_session(command: str, terminal: str) -> None:
+    if terminal == "iterm":
+        script = f'''
+tell application "iTerm"
+    activate
+    if (count of windows) = 0 then
+        create window with default profile
+    end if
+    tell current window
+        create tab with default profile
+        tell current session
+            write text {json.dumps(command)}
+        end tell
+    end tell
+end tell
+'''
+    else:
+        script = f'''
+tell application "Terminal"
+    activate
+    do script {json.dumps(command)}
+end tell
+'''
+    run_osascript(script)
+
+
+def start_spotify_session(host: str, port: int, interval_seconds: float, terminal_preference: str) -> int:
+    if spotify_session_is_running():
+        print(f"Spotify session is already running with PID {spotify_session_pid_file().read_text().strip()}")
+        return 0
+
+    if service_is_loaded(launchctl_label_ref()):
+        print("The launchd service is running on the default port.")
+        print("Stop it first with `uv run np stop-service`, or choose another port for the Spotify session.")
+        return 1
+
+    terminal = detect_terminal_app(terminal_preference)
+    command = spotify_session_command(host, port, interval_seconds)
+    launch_terminal_session(command, terminal)
+    print(f"Launched Spotify session in {terminal} at http://{host}:{port}/")
+    return 0
+
+
+def run_spotify_session(host: str, port: int, interval_seconds: float, idle_text: str) -> int:
+    pid_path = spotify_session_pid_file()
+    pid_path.write_text(str(os.getpid()))
+    try:
+        return run_server("spotify", idle_text, host, port, interval_seconds)
+    finally:
+        remove_file_if_exists(pid_path)
+
+
+def stop_spotify_session() -> int:
+    pid_path = spotify_session_pid_file()
+    if not pid_path.exists():
+        print("Spotify session is not running")
+        return 0
+    try:
+        pid = int(pid_path.read_text().strip())
+    except ValueError:
+        remove_file_if_exists(pid_path)
+        print("Removed invalid Spotify session pid file")
+        return 0
+
+    try:
+        os.kill(pid, 15)
+    except ProcessLookupError:
+        pass
+
+    remove_file_if_exists(pid_path)
+    print(f"Stopped Spotify session pid {pid}")
+    return 0
 
 
 def start_service() -> int:
@@ -1371,11 +1667,13 @@ def main(argv: list[str]) -> int:
     output_format = getattr(args, "format", "json")
 
     if command == "current":
-        track = select_track(source)
+        track, providers = select_track_with_diagnostics(source)
         if output_format == "text":
             print(track.to_text(idle_text))
         else:
-            print(json.dumps(asdict(track), indent=2, sort_keys=True))
+            payload = asdict(track)
+            payload["providers"] = providers
+            print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
     if command == "artwork":
@@ -1398,6 +1696,15 @@ def main(argv: list[str]) -> int:
 
     if command == "serve":
         return run_server(source, idle_text, args.host, args.port, args.interval_seconds)
+
+    if command == "start-spotify-session":
+        return start_spotify_session(args.host, args.port, args.interval_seconds, args.terminal)
+
+    if command == "spotify-session-serve":
+        return run_spotify_session(args.host, args.port, args.interval_seconds, idle_text)
+
+    if command == "stop-spotify-session":
+        return stop_spotify_session()
 
     if command == "init-config":
         return init_config()
