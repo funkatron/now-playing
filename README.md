@@ -61,9 +61,14 @@ The HTTP API provides the following endpoints:
 - `GET /current.txt` - current state as text (4-line rendered view)
 - `GET /artwork` - current artwork path as JSON, or `null` if there is no artwork
 - `GET /current_artwork.png` - current artwork file
+- `GET /spotify/current` - temporary Spotify-only state as JSON
+- `GET /spotify/current.txt` - temporary Spotify-only text view
+- `GET /spotify/artwork` - temporary Spotify-only artwork path as JSON
+- `GET /spotify/current_artwork.png` - temporary Spotify-only artwork file
 - `GET /events` - server-sent events stream for live updates
 - `GET /health` - health check
 - `GET /` - browser viewer
+- `GET /spotify/` - temporary Spotify-only viewer
 
 ## Requirements
 
@@ -106,7 +111,8 @@ uv run np start-spotify-session
 uv run np stop-spotify-session
 ```
 
-That launches a Spotify-pinned service inside Terminal or iTerm instead of through `launchd`.
+That launches a separate Spotify polling worker inside Terminal or iTerm instead of through `launchd`.
+The main service keeps serving the normal API and viewer on `/`, while the temporary Spotify API and viewer live under `/spotify/`.
 
 The browser viewer is intentionally simple. It subscribes to `/events` with server-sent events, so text and artwork updates are pushed from the backend instead of the page polling `/current` on a timer.
 
@@ -174,7 +180,14 @@ Browser viewer:
 open http://127.0.0.1:8976/
 ```
 
+Temporary Spotify viewer:
+
+```bash
+open http://127.0.0.1:8976/spotify/
+```
+
 `/current` is the machine-facing JSON endpoint. `/` is the human-facing viewer.
+`/spotify/current` and `/spotify/` are the temporary separate Spotify endpoints backed by the interactive Spotify worker.
 
 ## OBS
 
@@ -287,7 +300,7 @@ uv run np uninstall-service
 - `tail`
   Prints the recent `launchd` log output. Use `--follow` to stream it until you press `Ctrl-C`.
 - `start-spotify-session`
-  Launches a Spotify-pinned service inside Terminal or iTerm. Use this when Spotify works interactively but not from the background LaunchAgent.
+  Launches a separate Spotify polling worker inside Terminal or iTerm. Use this when Spotify works interactively but not from the background LaunchAgent.
 - `stop-spotify-session`
   Stops the Spotify terminal session if one is running.
 - `uninstall-service`
@@ -306,4 +319,5 @@ uv run np tail --follow
 uv run np restart-service
 uv run np start-spotify-session
 curl http://127.0.0.1:8976/current
+curl http://127.0.0.1:8976/spotify/current
 ```

@@ -217,14 +217,14 @@ def test_read_current_payload_prefers_existing_json(monkeypatch, tmp_path):
     payload = {"source": "spotify", "state": "idle", "text": ""}
     current_path.write_text(json.dumps(payload))
     monkeypatch.setattr(np_service, "current_track_json_file", lambda: current_path)
-    assert np_service.read_current_payload("") == payload
+    assert np_service.read_current_payload("") == {**payload, "artwork_path": None}
 
 
 def test_read_current_payload_falls_back_to_sync(monkeypatch, tmp_path):
     current_path = tmp_path / "current_track.json"
     current_path.write_text("{bad json")
     monkeypatch.setattr(np_service, "current_track_json_file", lambda: current_path)
-    monkeypatch.setattr(np_service, "sync", lambda source, idle_text: {"track": {"source": "apple_music", "state": "idle"}})
+    monkeypatch.setattr(np_service, "sync", lambda source, idle_text, namespace="current": {"track": {"source": "apple_music", "state": "idle"}})
     assert np_service.read_current_payload("") == {"source": "apple_music", "state": "idle"}
 
 
@@ -350,7 +350,7 @@ def test_sync_updates_obs_only_when_track_changes(monkeypatch, tmp_path):
     source_artwork.write_bytes(b"artwork")
 
     monkeypatch.setattr(np_service, "repo_dir", lambda: repo_root)
-    monkeypatch.setattr(np_service, "read_previous_state", lambda: {})
+    monkeypatch.setattr(np_service, "read_previous_state", lambda namespace="current": {})
 
     def make_track():
         return np_service.TrackInfo(
@@ -388,7 +388,7 @@ def test_sync_updates_obs_only_when_track_changes(monkeypatch, tmp_path):
     assert first["track"]["providers"]["apple_music"]["state"] == "playing"
     assert obs_calls == [("apple_music", '"Track"\nArtist\nAlbum')]
 
-    monkeypatch.setattr(np_service, "read_previous_state", lambda: {
+    monkeypatch.setattr(np_service, "read_previous_state", lambda namespace="current": {
         "track": {
             "source": "apple_music",
             "state": "playing",
@@ -494,6 +494,65 @@ def test_request_handler_artwork_file(monkeypatch, tmp_path):
         thread.join(timeout=5)
 
 
+def test_request_handler_spotify_namespaced_endpoints(monkeypatch, tmp_path):
+    spotify_json = tmp_path / "spotify_current_track.json"
+    spotify_json.write_text(
+        json.dumps(
+            {
+                "source": "spotify",
+                "state": "playing",
+                "title": "Song",
+                "artist": "Artist",
+                "album": "Album",
+                "artwork_path": str(tmp_path / "spotify_current_artwork.png"),
+                "text": '"Song"\nArtist\nAlbum',
+                "providers": {
+                    "spotify": {
+                        "source": "spotify",
+                        "state": "playing",
+                        "detail": "Song / Artist / Album",
+                        "error": None,
+                        "updated_at": "now",
+                    }
+                },
+                "updated_at": "now",
+                "year": None,
+            }
+        )
+    )
+    spotify_artwork = tmp_path / "spotify_current_artwork.png"
+    spotify_artwork.write_bytes(b"png-bytes")
+
+    monkeypatch.setattr(np_service, "namespaced_current_track_json_file", lambda namespace="current": spotify_json if namespace == "spotify" else tmp_path / "unused.json")
+    monkeypatch.setattr(np_service, "namespaced_current_artwork_file", lambda namespace="current": spotify_artwork if namespace == "spotify" else tmp_path / "unused.png")
+
+    server = np_service.NowPlayingHTTPServer(("127.0.0.1", 0), np_service.RequestHandler, lambda: {})
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        conn.request("GET", "/spotify/current")
+        current = json.loads(conn.getresponse().read().decode("utf-8"))
+        assert current["source"] == "spotify"
+        assert current["state"] == "playing"
+
+        conn.request("GET", "/spotify/current.txt")
+        assert conn.getresponse().read().decode("utf-8") == '"Song"\nArtist\nAlbum'
+
+        conn.request("GET", "/spotify/artwork")
+        artwork = json.loads(conn.getresponse().read().decode("utf-8"))
+        assert artwork["artwork_path"] == str(spotify_artwork)
+
+        conn.request("GET", "/spotify/current_artwork.png")
+        response = conn.getresponse()
+        assert response.status == 200
+        assert response.read() == b"png-bytes"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_install_and_uninstall_service(monkeypatch, tmp_path, capsys):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -592,7 +651,7 @@ def test_service_status_reports_install_and_runtime_state(monkeypatch, tmp_path,
 
 def test_spotify_session_command_and_terminal_detection(monkeypatch, tmp_path):
     monkeypatch.setattr(np_service, "repo_dir", lambda: tmp_path)
-    assert "spotify-session-serve" in np_service.spotify_session_command("127.0.0.1", 8976, 5)
+    assert "spotify-session-serve" in np_service.spotify_session_command(5)
     assert np_service.detect_terminal_app("terminal") == "terminal"
     monkeypatch.setattr(np_service.Path, "exists", lambda self: str(self) == "/Applications/iTerm.app")
     assert np_service.detect_terminal_app("auto") == "iterm"
@@ -601,12 +660,11 @@ def test_spotify_session_command_and_terminal_detection(monkeypatch, tmp_path):
 def test_start_and_stop_spotify_session(monkeypatch, tmp_path, capsys):
     pid_path = tmp_path / "spotify-session.pid"
     monkeypatch.setattr(np_service, "spotify_session_pid_file", lambda: pid_path)
-    monkeypatch.setattr(np_service, "service_is_loaded", lambda _label_ref: False)
-    monkeypatch.setattr(np_service, "launchctl_label_ref", lambda: "gui/501/com.funkatron.now-playing")
     monkeypatch.setattr(np_service, "detect_terminal_app", lambda preference: "terminal")
     monkeypatch.setattr(np_service, "launch_terminal_session", lambda command, terminal: None)
+    monkeypatch.setattr(np_service, "service_http_url", lambda: "http://127.0.0.1:8976/")
 
-    assert np_service.start_spotify_session("127.0.0.1", 8976, 5, "auto") == 0
+    assert np_service.start_spotify_session(5, "auto") == 0
     assert "Launched Spotify session in terminal" in capsys.readouterr().out
 
     pid_path.write_text("12345")
@@ -617,13 +675,19 @@ def test_start_and_stop_spotify_session(monkeypatch, tmp_path, capsys):
     assert not pid_path.exists()
 
 
-def test_start_spotify_session_refuses_when_launchd_service_is_running(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(np_service, "spotify_session_pid_file", lambda: tmp_path / "spotify-session.pid")
-    monkeypatch.setattr(np_service, "service_is_loaded", lambda _label_ref: True)
-    monkeypatch.setattr(np_service, "launchctl_label_ref", lambda: "gui/501/com.funkatron.now-playing")
+def test_run_spotify_session_writes_spotify_namespace(monkeypatch, tmp_path):
+    pid_path = tmp_path / "spotify-session.pid"
+    monkeypatch.setattr(np_service, "spotify_session_pid_file", lambda: pid_path)
+    calls = []
 
-    assert np_service.start_spotify_session("127.0.0.1", 8976, 5, "auto") == 1
-    assert "launchd service is running" in capsys.readouterr().out
+    def fake_sync(source, idle_text, namespace):
+        calls.append((source, idle_text, namespace))
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(np_service, "sync", fake_sync)
+
+    assert np_service.run_spotify_session(5, "") == 0
+    assert calls == [("spotify", "", "spotify")]
 
 
 def test_tail_service_log_prints_recent_lines(monkeypatch, tmp_path, capsys):

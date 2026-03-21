@@ -140,6 +140,36 @@ def spotify_session_pid_file() -> Path:
     return data_dir() / "spotify-session.pid"
 
 
+def namespaced_state_file(namespace: str = "current") -> Path:
+    if namespace == "spotify":
+        return data_dir() / "spotify_sync_state.json"
+    return state_file()
+
+
+def namespaced_current_song_file(namespace: str = "current") -> Path:
+    if namespace == "spotify":
+        return data_dir() / "spotify_current_song.txt"
+    return current_song_file()
+
+
+def namespaced_current_track_json_file(namespace: str = "current") -> Path:
+    if namespace == "spotify":
+        return data_dir() / "spotify_current_track.json"
+    return current_track_json_file()
+
+
+def namespaced_artwork_manifest_file(namespace: str = "current") -> Path:
+    if namespace == "spotify":
+        return data_dir() / "spotify_now_playing_artworks.txt"
+    return artwork_manifest_file()
+
+
+def namespaced_current_artwork_file(namespace: str = "current") -> Path:
+    if namespace == "spotify":
+        return data_dir() / "spotify_current_artwork.png"
+    return current_artwork_file()
+
+
 def write_text_if_changed(path: Path, content: str) -> bool:
     existing = path.read_text() if path.exists() else None
     if existing == content:
@@ -204,8 +234,8 @@ def load_config_env() -> None:
         os.environ.setdefault(key.strip(), value.strip())
 
 
-def read_previous_state() -> dict:
-    path = state_file()
+def read_previous_state(namespace: str = "current") -> dict:
+    path = namespaced_state_file(namespace)
     if not path.exists():
         return {}
 
@@ -216,8 +246,8 @@ def read_previous_state() -> dict:
         return {}
 
 
-def save_state(payload: dict) -> None:
-    write_json_if_changed(state_file(), payload)
+def save_state(payload: dict, namespace: str = "current") -> None:
+    write_json_if_changed(namespaced_state_file(namespace), payload)
 
 
 def extract_apple_music_artwork(track) -> str:
@@ -512,21 +542,22 @@ def update_obs(track: TrackInfo, display_text: str) -> bool:
     return True
 
 
-def materialize_outputs(track: TrackInfo, idle_text: str) -> dict:
+def materialize_outputs(track: TrackInfo, idle_text: str, namespace: str = "current") -> dict:
     display_text = track.to_text(idle_text)
     artwork_changed = False
     if track.artwork_path:
-        artwork_changed = copy_file_if_changed(Path(track.artwork_path), current_artwork_file())
-        write_text_if_changed(artwork_manifest_file(), f"{current_artwork_file()}\n")
-        track.artwork_path = str(current_artwork_file())
+        artwork_file = namespaced_current_artwork_file(namespace)
+        artwork_changed = copy_file_if_changed(Path(track.artwork_path), artwork_file)
+        write_text_if_changed(namespaced_artwork_manifest_file(namespace), f"{artwork_file}\n")
+        track.artwork_path = str(artwork_file)
     else:
-        artwork_changed = remove_file_if_exists(current_artwork_file()) or artwork_changed
-        remove_file_if_exists(artwork_manifest_file())
+        artwork_changed = remove_file_if_exists(namespaced_current_artwork_file(namespace)) or artwork_changed
+        remove_file_if_exists(namespaced_artwork_manifest_file(namespace))
 
     payload = asdict(track)
     payload["text"] = display_text
 
-    text_changed = write_text_if_changed(current_song_file(), display_text)
+    text_changed = write_text_if_changed(namespaced_current_song_file(namespace), display_text)
 
     return {
         "payload": payload,
@@ -536,11 +567,11 @@ def materialize_outputs(track: TrackInfo, idle_text: str) -> dict:
     }
 
 
-def sync(source: str, idle_text: str) -> dict:
+def sync(source: str, idle_text: str, namespace: str = "current") -> dict:
     track, providers = select_track_with_diagnostics(source)
-    previous = read_previous_state()
+    previous = read_previous_state(namespace)
 
-    outputs = materialize_outputs(track, idle_text)
+    outputs = materialize_outputs(track, idle_text, namespace)
     payload = outputs["payload"]
     payload["providers"] = providers
 
@@ -551,7 +582,7 @@ def sync(source: str, idle_text: str) -> dict:
     if not track_changed and previous.get("updated_at"):
         payload["updated_at"] = previous["updated_at"]
 
-    json_changed = write_json_if_changed(current_track_json_file(), payload)
+    json_changed = write_json_if_changed(namespaced_current_track_json_file(namespace), payload)
 
     obs_updated = False
     if track_changed or outputs["artwork_changed"]:
@@ -563,7 +594,8 @@ def sync(source: str, idle_text: str) -> dict:
             "artwork_path": payload["artwork_path"],
             "updated_at": payload["updated_at"],
             "providers": providers,
-        }
+        },
+        namespace,
     )
 
     return {
@@ -576,14 +608,45 @@ def sync(source: str, idle_text: str) -> dict:
     }
 
 
-def read_current_payload(idle_text: str) -> dict:
-    if current_track_json_file().exists():
+def empty_payload(source: str = "unknown") -> dict:
+    return {
+        "album": "",
+        "artist": "",
+        "artwork_path": None,
+        "providers": {
+            source: {
+                "detail": "",
+                "error": None,
+                "source": source,
+                "state": "not_running",
+                "updated_at": iso_now(),
+            }
+        } if source != "unknown" else {},
+        "source": source,
+        "state": "not_running",
+        "text": "",
+        "title": "",
+        "updated_at": iso_now(),
+        "year": None,
+    }
+
+
+def read_current_payload(idle_text: str, namespace: str = "current", live_fallback: bool = True) -> dict:
+    path = namespaced_current_track_json_file(namespace)
+    if path.exists():
         try:
-            return json.loads(current_track_json_file().read_text())
+            payload = json.loads(path.read_text())
+            if payload.get("artwork_path", "") == "":
+                payload["artwork_path"] = None
+            return payload
         except json.JSONDecodeError:
             LOGGER.warning("Current track file is invalid; regenerating from live state.")
 
-    result = sync(DEFAULT_SOURCE, idle_text)
+    if not live_fallback:
+        source = "spotify" if namespace == "spotify" else "unknown"
+        return empty_payload(source)
+
+    result = sync(DEFAULT_SOURCE, idle_text, namespace)
     return result["track"]
 
 
@@ -628,7 +691,11 @@ class RequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
 
         if parsed.path == "/":
-            self.respond_html(self.render_dashboard())
+            self.respond_html(self.render_dashboard("/", True))
+            return
+
+        if parsed.path == "/spotify/" or parsed.path == "/spotify":
+            self.respond_html(self.render_dashboard("/spotify", False))
             return
 
         if parsed.path == "/events":
@@ -653,7 +720,25 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/current_artwork.png":
-            self.respond_artwork()
+            self.respond_artwork("current")
+            return
+
+        if parsed.path == "/spotify/current":
+            self.respond_json(read_current_payload("", "spotify", live_fallback=False))
+            return
+
+        if parsed.path == "/spotify/current.txt":
+            spotify_payload = read_current_payload("", "spotify", live_fallback=False)
+            self.respond_text(spotify_payload.get("text", ""))
+            return
+
+        if parsed.path == "/spotify/artwork":
+            spotify_payload = read_current_payload("", "spotify", live_fallback=False)
+            self.respond_json({"artwork_path": spotify_payload.get("artwork_path") or None})
+            return
+
+        if parsed.path == "/spotify/current_artwork.png":
+            self.respond_artwork("spotify")
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
@@ -661,8 +746,8 @@ class RequestHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         LOGGER.debug("HTTP %s - %s", self.address_string(), fmt % args)
 
-    def render_dashboard(self) -> str:
-        return """<!doctype html>
+    def render_dashboard(self, route_prefix: str, use_sse: bool) -> str:
+        html = """<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -1047,6 +1132,8 @@ class RequestHandler(BaseHTTPRequestHandler):
     </main>
   </div>
   <script>
+    const endpointPrefix = "__ENDPOINT_PREFIX__";
+    const useSse = __USE_SSE__;
     const titleEl = document.getElementById("title");
     const metaEl = document.getElementById("meta");
     const statusEl = document.getElementById("status");
@@ -1056,6 +1143,10 @@ class RequestHandler(BaseHTTPRequestHandler):
     const artworkEmptyEl = document.getElementById("artwork-empty");
     const providersEl = document.getElementById("providers");
     let lastArtworkVersion = "";
+
+    function endpoint(path) {
+      return endpointPrefix + path;
+    }
 
     function formatProviderName(name) {
       if (name === "apple_music") return "Apple Music";
@@ -1105,7 +1196,7 @@ class RequestHandler(BaseHTTPRequestHandler):
       if (payload.artwork_path) {
         const version = payload.updated_at || payload.artwork_path;
         if (version !== lastArtworkVersion) {
-          artworkImageEl.src = "/current_artwork.png?v=" + encodeURIComponent(version);
+          artworkImageEl.src = endpoint("/current_artwork.png") + "?v=" + encodeURIComponent(version);
           lastArtworkVersion = version;
         }
         artworkImageEl.style.display = "block";
@@ -1118,16 +1209,37 @@ class RequestHandler(BaseHTTPRequestHandler):
       }
     }
 
-    const events = new EventSource("/events");
-    events.addEventListener("now_playing", (event) => {
-      render(JSON.parse(event.data));
-    });
-    events.onerror = () => {
+    async function fetchCurrent() {
+      const response = await fetch(endpoint("/current"), { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error("current fetch failed");
+      }
+      render(await response.json());
+    }
+
+    fetchCurrent().catch(() => {
       statusEl.textContent = "disconnected";
-    };
+    });
+
+    if (useSse) {
+      const events = new EventSource(endpoint("/events"));
+      events.addEventListener("now_playing", (event) => {
+        render(JSON.parse(event.data));
+      });
+      events.onerror = () => {
+        statusEl.textContent = "disconnected";
+      };
+    } else {
+      setInterval(() => {
+        fetchCurrent().catch(() => {
+          statusEl.textContent = "disconnected";
+        });
+      }, 5000);
+    }
   </script>
 </body>
 </html>"""
+        return html.replace("__ENDPOINT_PREFIX__", route_prefix).replace("__USE_SSE__", "true" if use_sse else "false")
 
     def respond_json(self, payload: dict) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
@@ -1153,8 +1265,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
 
-    def respond_artwork(self) -> None:
-        path = current_artwork_file()
+    def respond_artwork(self, namespace: str = "current") -> None:
+        path = namespaced_current_artwork_file(namespace)
         if not path.exists():
             self.send_error(HTTPStatus.NOT_FOUND, "Artwork not found")
             return
@@ -1263,8 +1375,6 @@ def build_parser() -> argparse.ArgumentParser:
         "start-spotify-session",
         help="Launch a Spotify-pinned service in Terminal or iTerm",
     )
-    spotify_session_parser.add_argument("--host", default=os.environ.get("NOW_PLAYING_HOST", "127.0.0.1"))
-    spotify_session_parser.add_argument("--port", type=int, default=int(os.environ.get("NOW_PLAYING_PORT", "8976")))
     spotify_session_parser.add_argument(
         "--interval-seconds",
         type=float,
@@ -1279,8 +1389,6 @@ def build_parser() -> argparse.ArgumentParser:
         "spotify-session-serve",
         help="Internal: run the Spotify terminal session server",
     )
-    hidden_spotify_parser.add_argument("--host", default=os.environ.get("NOW_PLAYING_HOST", "127.0.0.1"))
-    hidden_spotify_parser.add_argument("--port", type=int, default=int(os.environ.get("NOW_PLAYING_PORT", "8976")))
     hidden_spotify_parser.add_argument(
         "--interval-seconds",
         type=float,
@@ -1420,7 +1528,7 @@ def detect_terminal_app(preference: str) -> str:
     return "terminal"
 
 
-def spotify_session_command(host: str, port: int, interval_seconds: float) -> str:
+def spotify_session_command(interval_seconds: float) -> str:
     return " ".join(
         [
             "cd",
@@ -1430,10 +1538,6 @@ def spotify_session_command(host: str, port: int, interval_seconds: float) -> st
             "run",
             "np",
             "spotify-session-serve",
-            "--host",
-            shlex.quote(host),
-            "--port",
-            shlex.quote(str(port)),
             "--interval-seconds",
             shlex.quote(str(interval_seconds)),
         ]
@@ -1466,28 +1570,36 @@ end tell
     run_osascript(script)
 
 
-def start_spotify_session(host: str, port: int, interval_seconds: float, terminal_preference: str) -> int:
+def start_spotify_session(interval_seconds: float, terminal_preference: str) -> int:
     if spotify_session_is_running():
         print(f"Spotify session is already running with PID {spotify_session_pid_file().read_text().strip()}")
         return 0
 
-    if service_is_loaded(launchctl_label_ref()):
-        print("The launchd service is running on the default port.")
-        print("Stop it first with `uv run np stop-service`, or choose another port for the Spotify session.")
-        return 1
-
     terminal = detect_terminal_app(terminal_preference)
-    command = spotify_session_command(host, port, interval_seconds)
+    command = spotify_session_command(interval_seconds)
     launch_terminal_session(command, terminal)
-    print(f"Launched Spotify session in {terminal} at http://{host}:{port}/")
+    print(f"Launched Spotify session in {terminal}; view it at {service_http_url()}spotify/")
     return 0
 
 
-def run_spotify_session(host: str, port: int, interval_seconds: float, idle_text: str) -> int:
+def run_spotify_session(interval_seconds: float, idle_text: str) -> int:
     pid_path = spotify_session_pid_file()
     pid_path.write_text(str(os.getpid()))
     try:
-        return run_server("spotify", idle_text, host, port, interval_seconds)
+        while True:
+            try:
+                result = sync("spotify", idle_text, "spotify")
+                LOGGER.info(
+                    "Spotify session sync: state=%s changed=%s",
+                    result["track"]["state"],
+                    result["changed"],
+                )
+            except Exception:
+                LOGGER.exception("Spotify session sync failed")
+            time.sleep(interval_seconds)
+    except KeyboardInterrupt:
+        LOGGER.info("Stopping Spotify session")
+        return 0
     finally:
         remove_file_if_exists(pid_path)
 
@@ -1698,10 +1810,10 @@ def main(argv: list[str]) -> int:
         return run_server(source, idle_text, args.host, args.port, args.interval_seconds)
 
     if command == "start-spotify-session":
-        return start_spotify_session(args.host, args.port, args.interval_seconds, args.terminal)
+        return start_spotify_session(args.interval_seconds, args.terminal)
 
     if command == "spotify-session-serve":
-        return run_spotify_session(args.host, args.port, args.interval_seconds, idle_text)
+        return run_spotify_session(args.interval_seconds, idle_text)
 
     if command == "stop-spotify-session":
         return stop_spotify_session()
