@@ -2,12 +2,16 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
+.coverage
 
 # macOS
 .DS_Store
 
 # Virtual environment
 venv/
+.venv/
+config.env
 
 # app
 _data/
