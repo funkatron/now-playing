@@ -25,7 +25,7 @@ This repo runs a small macOS **now-playing** service. It polls Apple Music or Sp
 ## Requirements
 
 - macOS
-- Python 3.9+
+- Python 3.12+
 - [uv](https://github.com/astral-sh/uv) (`brew install uv`)
 - Apple Music and/or Spotify installed
 - OBS only if you want WebSocket-driven updates (flat files work without it)

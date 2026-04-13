@@ -2,7 +2,7 @@
 
 ## Stack
 
-- **Python** 3.9+; dependencies and packaging in [`pyproject.toml`](pyproject.toml).
+- **Python** 3.12+; dependencies and packaging in [`pyproject.toml`](pyproject.toml).
 - **CLI / env**: use **`uv`** (`uv sync`, `uv run np …`). Do not assume a global `pip install` unless the user says so.
 
 ## Verify changes

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "now-playing"
 version = "0.1.0"
 description = "Local now playing daemon for Apple Music, Spotify, and OBS"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 dependencies = [
   "obs-websocket-py==1.0",
   "pytest",
