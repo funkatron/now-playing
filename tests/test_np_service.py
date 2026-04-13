@@ -736,3 +736,20 @@ def test_start_stop_and_restart_service(monkeypatch, tmp_path, capsys):
     assert any(command[:2] == ["launchctl", "bootstrap"] for command in calls)
     assert any(command[:2] == ["launchctl", "kickstart"] for command in calls)
     assert any(command[:2] == ["launchctl", "bootout"] for command in calls)
+
+
+def test_get_apple_music_track_handles_missing_scriptingbridge(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def selective_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if level == 0 and name == "ScriptingBridge":
+            raise ImportError("No module named 'ScriptingBridge'")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", selective_import)
+    track = np_service.get_apple_music_track()
+    assert track.source == "apple_music"
+    assert track.state == "not_running"
+    assert track.updated_at

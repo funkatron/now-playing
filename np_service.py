@@ -366,7 +366,10 @@ def spotify_track_fields(snapshot: list[str]) -> tuple[str, str, str, str]:
 
 
 def get_apple_music_track() -> TrackInfo:
-    import ScriptingBridge
+    try:
+        import ScriptingBridge
+    except ImportError:
+        return TrackInfo(source="apple_music", state="not_running", updated_at=iso_now())
 
     music_app = ScriptingBridge.SBApplication.applicationWithBundleIdentifier_("com.apple.Music")
     if not music_app or not music_app.isRunning():
