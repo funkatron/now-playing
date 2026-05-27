@@ -20,3 +20,6 @@ np = "np_service:cli"
 [tool.setuptools]
 py-modules = ["np_service"]
 packages = ["now_playing"]
+
+[tool.setuptools.package-data]
+now_playing = ["templates/*.html"]

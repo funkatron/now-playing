@@ -14,6 +14,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from importlib import resources
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -114,6 +115,64 @@ def config_env_file() -> Path:
 
 def config_env_example_file() -> Path:
     return repo_dir() / "config.env.example"
+
+
+def bundled_template(name: str) -> Optional[str]:
+    try:
+        template_path = resources.files("now_playing").joinpath("templates", name)
+        return template_path.read_text(encoding="utf-8")
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
+        return None
+
+
+def template_has_placeholders(template: str, required: tuple[str, ...]) -> tuple[bool, tuple[str, ...]]:
+    missing = tuple(token for token in required if token not in template)
+    return (len(missing) == 0, missing)
+
+
+def load_html_template(name: str, override_env: str, fallback: str, required_placeholders: tuple[str, ...]) -> str:
+    def read_candidate(path: Path, source_name: str) -> Optional[str]:
+        try:
+            template = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            LOGGER.warning("Failed to read %s template %s: %s", source_name, path, exc)
+            return None
+        valid, missing = template_has_placeholders(template, required_placeholders)
+        if valid:
+            return template
+        LOGGER.warning(
+            "Ignoring %s template %s; missing placeholders: %s",
+            source_name,
+            path,
+            ", ".join(missing),
+        )
+        return None
+
+    override_path = os.environ.get(override_env, "").strip()
+    if override_path:
+        custom = read_candidate(Path(override_path), override_env)
+        if custom is not None:
+            return custom
+
+    directory_override = os.environ.get("NOW_PLAYING_TEMPLATE_DIR", "").strip()
+    if directory_override:
+        candidate = Path(directory_override) / name
+        directory_template = read_candidate(candidate, "NOW_PLAYING_TEMPLATE_DIR")
+        if directory_template is not None:
+            return directory_template
+
+    bundled = bundled_template(name)
+    if bundled is not None:
+        valid, missing = template_has_placeholders(bundled, required_placeholders)
+        if not valid:
+            LOGGER.warning("Bundled template %s is missing placeholders: %s", name, ", ".join(missing))
+            return fallback
+        return bundled
+
+    valid, missing = template_has_placeholders(fallback, required_placeholders)
+    if not valid:
+        LOGGER.warning("Fallback template %s is missing placeholders: %s", name, ", ".join(missing))
+    return fallback
 
 
 def state_file() -> Path:
@@ -687,6 +746,44 @@ class NowPlayingHTTPServer(ThreadingHTTPServer):
 class RequestHandler(BaseHTTPRequestHandler):
     server_version = "NowPlayingHTTP/1.0"
 
+    @staticmethod
+    def overlay_preset(raw_value: str) -> str:
+        preset = raw_value.strip().lower() if raw_value else "compact"
+        return "tv" if preset == "tv" else "compact"
+
+    @staticmethod
+    def overlay_flag(raw_value: str) -> bool:
+        return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def overlay_max_lines(raw_value: str) -> int:
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return 2
+        return max(1, min(3, value))
+
+    @staticmethod
+    def overlay_panel_opacity(raw_value: str) -> float:
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            return 0.64
+        return max(0.20, min(0.95, value))
+
+    def overlay_options(self, query: str) -> dict:
+        parsed = urllib.parse.parse_qs(query)
+        preset_value = parsed.get("preset", [os.environ.get("NOW_PLAYING_OVERLAY_PRESET", "compact")])[0]
+        hide_status_value = parsed.get("hide_status", [os.environ.get("NOW_PLAYING_OVERLAY_HIDE_STATUS", "0")])[0]
+        max_lines_value = parsed.get("max_lines", [os.environ.get("NOW_PLAYING_OVERLAY_MAX_LINES", "2")])[0]
+        panel_opacity_value = parsed.get("panel_opacity", [os.environ.get("NOW_PLAYING_OVERLAY_PANEL_OPACITY", "0.64")])[0]
+        return {
+            "preset": self.overlay_preset(preset_value),
+            "hide_status": self.overlay_flag(hide_status_value),
+            "max_lines": self.overlay_max_lines(max_lines_value),
+            "panel_opacity": self.overlay_panel_opacity(panel_opacity_value),
+        }
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
 
@@ -694,8 +791,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.respond_html(self.render_dashboard("/", True))
             return
 
+        if parsed.path == "/overlay":
+            self.respond_html(self.render_overlay("/", True, self.overlay_options(parsed.query)))
+            return
+
         if parsed.path == "/spotify/" or parsed.path == "/spotify":
             self.respond_html(self.render_dashboard("/spotify", False))
+            return
+
+        if parsed.path == "/spotify/overlay":
+            self.respond_html(self.render_overlay("/spotify", False, self.overlay_options(parsed.query)))
             return
 
         if parsed.path == "/events":
@@ -747,7 +852,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         LOGGER.debug("HTTP %s - %s", self.address_string(), fmt % args)
 
     def render_dashboard(self, route_prefix: str, use_sse: bool) -> str:
-        html = """<!doctype html>
+        fallback_html = """<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -1217,29 +1322,416 @@ class RequestHandler(BaseHTTPRequestHandler):
       render(await response.json());
     }
 
-    fetchCurrent().catch(() => {
-      statusEl.textContent = "disconnected";
-    });
+    let events = null;
+    let reconnectTimer = null;
 
-    if (useSse) {
-      const events = new EventSource(endpoint("/events"));
+    function scheduleReconnect() {
+      if (!useSse || reconnectTimer !== null) {
+        return;
+      }
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectEvents();
+      }, 2000);
+    }
+
+    function connectEvents() {
+      if (!useSse) {
+        return;
+      }
+      if (events) {
+        events.close();
+      }
+      events = new EventSource(endpoint("/events"));
       events.addEventListener("now_playing", (event) => {
         render(JSON.parse(event.data));
       });
       events.onerror = () => {
         statusEl.textContent = "disconnected";
+        if (events) {
+          events.close();
+          events = null;
+        }
+        scheduleReconnect();
       };
-    } else {
-      setInterval(() => {
-        fetchCurrent().catch(() => {
-          statusEl.textContent = "disconnected";
-        });
-      }, 5000);
     }
+
+    fetchCurrent().catch(() => {
+      statusEl.textContent = "disconnected";
+    });
+
+    connectEvents();
+    setInterval(() => {
+      fetchCurrent().catch(() => {
+        statusEl.textContent = "disconnected";
+      });
+    }, 5000);
   </script>
 </body>
 </html>"""
-        return html.replace("__ENDPOINT_PREFIX__", route_prefix).replace("__USE_SSE__", "true" if use_sse else "false")
+        endpoint_prefix = "" if route_prefix == "/" else route_prefix
+        html = load_html_template(
+            "dashboard.html",
+            "NOW_PLAYING_DASHBOARD_TEMPLATE_PATH",
+            fallback_html,
+            ("__ENDPOINT_PREFIX__", "__USE_SSE__"),
+        )
+        return html.replace("__ENDPOINT_PREFIX__", endpoint_prefix).replace("__USE_SSE__", "true" if use_sse else "false")
+
+    def render_overlay(self, route_prefix: str, use_sse: bool, overlay_options: Optional[dict] = None) -> str:
+        options = overlay_options or {
+            "preset": "compact",
+            "hide_status": False,
+            "max_lines": 2,
+            "panel_opacity": 0.64,
+        }
+        preset = options["preset"]
+        status_class = "overlay-hide-status" if options["hide_status"] else ""
+        max_lines = str(options["max_lines"])
+        panel_opacity = f"{options['panel_opacity']:.2f}"
+
+        fallback_html = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Now Playing Overlay</title>
+  <style>
+    :root {
+      --text: #f4efe4;
+      --muted: #d8d1c2;
+      --panel: rgba(10, 12, 15, __OVERLAY_PANEL_OPACITY__);
+      --panel-edge: rgba(255, 255, 255, 0.14);
+      --font-iosevka:
+        "Iosevka Aile",
+        "Iosevka Etoile",
+        "Iosevka Curly",
+        "Iosevka Curly Slab",
+        "Iosevka Slab",
+        "Iosevka Term",
+        "Iosevka Fixed",
+        "Iosevka",
+        "Iosevka Nerd Font",
+        "IosevkaTerm Nerd Font",
+        "IosevkaTerm NFM",
+        "Iosevka NFM",
+        monospace;
+    }
+    html, body {
+      margin: 0;
+      width: 100%;
+      min-height: 100vh;
+      background: transparent;
+      color: var(--text);
+      font-family: var(--font-iosevka);
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .overlay {
+      display: grid;
+      grid-template-columns: 160px minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
+      width: min(760px, calc(100vw - 24px));
+      padding: 12px;
+      border-radius: 18px;
+      background: var(--panel);
+      border: 1px solid var(--panel-edge);
+      box-shadow: 0 14px 44px rgba(0, 0, 0, 0.4);
+      box-sizing: border-box;
+      margin: 12px;
+      position: relative;
+      isolation: isolate;
+    }
+    .overlay.overlay-tv {
+      grid-template-columns: 280px minmax(0, 1fr);
+      gap: 24px;
+      width: min(1840px, calc(100vw - 64px));
+      padding: 24px;
+      border-radius: 28px;
+    }
+    .overlay.overlay-tv::before {
+      content: "";
+      position: absolute;
+      inset: -18px;
+      border-radius: inherit;
+      background-image: var(--artwork-url);
+      background-size: cover;
+      background-position: center;
+      filter: blur(56px) saturate(1.15);
+      opacity: 0;
+      transform: scale(1.05);
+      pointer-events: none;
+      z-index: -1;
+      transition: opacity 300ms ease;
+    }
+    .overlay.overlay-tv.has-art::before {
+      opacity: 0.24;
+    }
+    .artwork {
+      width: 160px;
+      height: 160px;
+      border-radius: 14px;
+      overflow: hidden;
+      background: rgba(0, 0, 0, 0.35);
+      display: grid;
+      place-items: center;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      font-size: 10px;
+      color: #b6afa2;
+    }
+    .overlay.overlay-tv .artwork {
+      width: 280px;
+      height: 280px;
+      border-radius: 22px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      box-shadow:
+        0 26px 52px rgba(0, 0, 0, 0.58),
+        0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+      background: linear-gradient(150deg, rgba(255, 255, 255, 0.08), rgba(12, 12, 12, 0.48));
+    }
+    .artwork img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: none;
+      transform: scale(1.02);
+      transition: transform 1200ms ease;
+    }
+    .overlay.overlay-tv .artwork img {
+      transform: scale(1.08);
+    }
+    .overlay.overlay-tv.has-art .artwork img {
+      transform: scale(1.12);
+    }
+    .content {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .title {
+      font-size: clamp(28px, 4.2vw, 52px);
+      line-height: 0.92;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      margin: 0;
+      max-width: 30ch;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: __OVERLAY_MAX_LINES__;
+      line-clamp: __OVERLAY_MAX_LINES__;
+      overflow: hidden;
+    }
+    .overlay.overlay-tv .title {
+      font-size: clamp(64px, 8vw, 124px);
+      line-height: 0.94;
+      letter-spacing: -0.03em;
+    }
+    .meta {
+      margin: 0;
+      color: var(--muted);
+      font-size: clamp(16px, 2vw, 24px);
+      line-height: 1.2;
+      max-width: 36ch;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: __OVERLAY_MAX_LINES__;
+      line-clamp: __OVERLAY_MAX_LINES__;
+      overflow: hidden;
+    }
+    .overlay.overlay-tv .meta {
+      font-size: clamp(34px, 4vw, 56px);
+      max-width: 34ch;
+    }
+    .status {
+      margin: 0;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #b6afa2;
+    }
+    .overlay.overlay-tv .status {
+      font-size: 20px;
+      letter-spacing: 0.14em;
+    }
+    .overlay.overlay-hide-status .status {
+      display: none;
+    }
+    @media (max-width: 960px) {
+      .overlay.overlay-tv {
+        grid-template-columns: 156px minmax(0, 1fr);
+        width: min(960px, calc(100vw - 24px));
+        gap: 14px;
+        padding: 14px;
+      }
+      .overlay.overlay-tv .artwork {
+        width: 156px;
+        height: 156px;
+      }
+      .overlay.overlay-tv .title {
+        font-size: clamp(36px, 7.6vw, 72px);
+      }
+      .overlay.overlay-tv .meta {
+        font-size: clamp(20px, 3.8vw, 34px);
+      }
+    }
+    @media (max-width: 640px) {
+      .overlay {
+        grid-template-columns: 96px minmax(0, 1fr);
+        gap: 10px;
+      }
+      .artwork {
+        width: 96px;
+        height: 96px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="overlay overlay-__OVERLAY_PRESET__ __OVERLAY_STATUS_CLASS__">
+    <div class="artwork">
+      <img id="artwork-image" alt="Current artwork">
+      <div id="artwork-empty">No Artwork</div>
+    </div>
+    <section class="content">
+      <h1 id="title" class="title">Waiting for playback</h1>
+      <p id="meta" class="meta">Start Apple Music or Spotify and press play.</p>
+      <p id="status" class="status">idle</p>
+    </section>
+  </main>
+  <script>
+    const endpointPrefix = "__ENDPOINT_PREFIX__";
+    const useSse = __USE_SSE__;
+    const titleEl = document.getElementById("title");
+    const metaEl = document.getElementById("meta");
+    const statusEl = document.getElementById("status");
+    const overlayEl = document.querySelector(".overlay");
+    const artworkImageEl = document.getElementById("artwork-image");
+    const artworkEmptyEl = document.getElementById("artwork-empty");
+    let lastArtworkVersion = "";
+
+    function endpoint(path) {
+      return endpointPrefix + path;
+    }
+
+    function cssUrl(value) {
+      return `url("${String(value).replace(/"/g, '\\"')}")`;
+    }
+
+    function render(payload) {
+      const state = payload.state || "unknown";
+      statusEl.textContent = state;
+
+      if (state === "playing" && payload.title) {
+        titleEl.textContent = payload.title;
+        const parts = [payload.artist, payload.album, payload.year].filter(Boolean);
+        metaEl.textContent = parts.join(" • ") || "Playing";
+      } else {
+        titleEl.textContent = "Waiting for playback";
+        metaEl.textContent = "Start Apple Music or Spotify and press play.";
+      }
+
+      if (payload.artwork_path) {
+        overlayEl.classList.add("has-art");
+        overlayEl.style.setProperty("--artwork-url", cssUrl(endpoint("/current_artwork.png")));
+        const version = payload.updated_at || payload.artwork_path;
+        if (version !== lastArtworkVersion) {
+          artworkImageEl.src = endpoint("/current_artwork.png") + "?v=" + encodeURIComponent(version);
+          lastArtworkVersion = version;
+        }
+        artworkImageEl.style.display = "block";
+        artworkEmptyEl.style.display = "none";
+      } else {
+        overlayEl.classList.remove("has-art");
+        overlayEl.style.removeProperty("--artwork-url");
+        lastArtworkVersion = "";
+        artworkImageEl.removeAttribute("src");
+        artworkImageEl.style.display = "none";
+        artworkEmptyEl.style.display = "block";
+      }
+    }
+
+    async function fetchCurrent() {
+      const response = await fetch(endpoint("/current"), { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error("current fetch failed");
+      }
+      render(await response.json());
+    }
+
+    let events = null;
+    let reconnectTimer = null;
+
+    function scheduleReconnect() {
+      if (!useSse || reconnectTimer !== null) {
+        return;
+      }
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectEvents();
+      }, 2000);
+    }
+
+    function connectEvents() {
+      if (!useSse) {
+        return;
+      }
+      if (events) {
+        events.close();
+      }
+      events = new EventSource(endpoint("/events"));
+      events.addEventListener("now_playing", (event) => {
+        render(JSON.parse(event.data));
+      });
+      events.onerror = () => {
+        statusEl.textContent = "disconnected";
+        if (events) {
+          events.close();
+          events = null;
+        }
+        scheduleReconnect();
+      };
+    }
+
+    fetchCurrent().catch(() => {
+      statusEl.textContent = "disconnected";
+    });
+
+    connectEvents();
+    setInterval(() => {
+      fetchCurrent().catch(() => {
+        statusEl.textContent = "disconnected";
+      });
+    }, 5000);
+  </script>
+</body>
+</html>"""
+        endpoint_prefix = "" if route_prefix == "/" else route_prefix
+        html = load_html_template(
+            "overlay.html",
+            "NOW_PLAYING_OVERLAY_TEMPLATE_PATH",
+            fallback_html,
+            (
+                "__ENDPOINT_PREFIX__",
+                "__USE_SSE__",
+                "__OVERLAY_PRESET__",
+                "__OVERLAY_STATUS_CLASS__",
+                "__OVERLAY_MAX_LINES__",
+                "__OVERLAY_PANEL_OPACITY__",
+            ),
+        )
+        return (
+            html.replace("__ENDPOINT_PREFIX__", endpoint_prefix)
+            .replace("__USE_SSE__", "true" if use_sse else "false")
+            .replace("__OVERLAY_PRESET__", preset)
+            .replace("__OVERLAY_STATUS_CLASS__", status_class)
+            .replace("__OVERLAY_MAX_LINES__", max_lines)
+            .replace("__OVERLAY_PANEL_OPACITY__", panel_opacity)
+        )
 
     def respond_json(self, payload: dict) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
@@ -1506,6 +1998,29 @@ def service_http_url() -> str:
     return f"http://{host}:{port}/"
 
 
+def obs_integration_info() -> dict:
+    websocket_enabled = obs_enabled()
+    websocket_port = int(os.environ.get("OBSWS_PORT", "4455"))
+
+    return {
+        "browser_overlay_url": f"{service_http_url()}overlay",
+        "spotify_overlay_url": f"{service_http_url()}spotify/overlay",
+        "files": {
+            "song": str(current_song_file()),
+            "artwork": str(current_artwork_file()),
+            "track_json": str(current_track_json_file()),
+        },
+        "websocket": {
+            "enabled": websocket_enabled,
+            "host": os.environ.get("OBSWS_HOST", "localhost"),
+            "port": websocket_port,
+            "image_input_name": os.environ.get("OBSWS_IMAGE_INPUT_NAME", "NPImage"),
+            "text_input_name": os.environ.get("OBSWS_TEXT_INPUT_NAME", ""),
+            "text_field": os.environ.get("OBSWS_TEXT_FIELD", "text"),
+        },
+    }
+
+
 def spotify_session_is_running() -> bool:
     pid_path = spotify_session_pid_file()
     if not pid_path.exists():
@@ -1685,6 +2200,7 @@ def service_status() -> int:
         "plist_path": str(launch_agent_path()),
         "log_path": str(logs_dir() / "launchd.log"),
         "url": service_http_url(),
+        "obs": obs_integration_info(),
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0 if installed else 1

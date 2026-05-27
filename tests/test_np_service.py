@@ -454,8 +454,33 @@ def test_request_handler_endpoints():
         dashboard = conn.getresponse().read().decode("utf-8")
         assert "Now Playing" in dashboard
         assert "EventSource" in dashboard
+        assert "connectEvents()" in dashboard
         assert "/current_artwork.png" in dashboard
         assert "Apple Music" in dashboard
+
+        conn.request("GET", "/overlay")
+        overlay = conn.getresponse().read().decode("utf-8")
+        assert "background: transparent;" in overlay
+        assert "justify-content: center;" in overlay
+        assert 'const endpointPrefix = "";' in overlay
+        assert "overlay overlay-compact" in overlay
+        assert "-webkit-line-clamp: 2;" in overlay
+        assert "Funkatron" not in overlay
+        assert "Live local feed for stream overlays" not in overlay
+
+        conn.request("GET", "/overlay?preset=tv")
+        overlay_tv = conn.getresponse().read().decode("utf-8")
+        assert "overlay overlay-tv" in overlay_tv
+        assert "clamp(64px, 8vw, 124px)" in overlay_tv
+        assert ".overlay.overlay-tv.has-art::before" in overlay_tv
+        assert "transform: scale(1.12);" in overlay_tv
+        assert 'overlayEl.style.setProperty("--artwork-url"' in overlay_tv
+
+        conn.request("GET", "/overlay?hide_status=1&max_lines=1&panel_opacity=0.45")
+        overlay_tuned = conn.getresponse().read().decode("utf-8")
+        assert "overlay-hide-status" in overlay_tuned
+        assert "-webkit-line-clamp: 1;" in overlay_tuned
+        assert "rgba(10, 12, 15, 0.45)" in overlay_tuned
 
         conn.request("GET", "/current")
         current = json.loads(conn.getresponse().read().decode("utf-8"))
@@ -547,10 +572,102 @@ def test_request_handler_spotify_namespaced_endpoints(monkeypatch, tmp_path):
         response = conn.getresponse()
         assert response.status == 200
         assert response.read() == b"png-bytes"
+
+        conn.request("GET", "/spotify/overlay")
+        spotify_overlay = conn.getresponse().read().decode("utf-8")
+        assert "background: transparent;" in spotify_overlay
+        assert 'const endpointPrefix = "/spotify";' in spotify_overlay
+        assert "overlay overlay-compact" in spotify_overlay
+        assert "connectEvents()" in spotify_overlay
+
+        conn.request("GET", "/spotify/overlay?preset=tv")
+        spotify_overlay_tv = conn.getresponse().read().decode("utf-8")
+        assert "overlay overlay-tv" in spotify_overlay_tv
+        assert 'const endpointPrefix = "/spotify";' in spotify_overlay_tv
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_overlay_uses_env_defaults(monkeypatch):
+    server = np_service.NowPlayingHTTPServer(("127.0.0.1", 0), np_service.RequestHandler, lambda: {})
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setenv("NOW_PLAYING_OVERLAY_PRESET", "tv")
+        monkeypatch.setenv("NOW_PLAYING_OVERLAY_HIDE_STATUS", "1")
+        monkeypatch.setenv("NOW_PLAYING_OVERLAY_MAX_LINES", "1")
+        monkeypatch.setenv("NOW_PLAYING_OVERLAY_PANEL_OPACITY", "0.50")
+
+        conn = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        conn.request("GET", "/overlay")
+        overlay = conn.getresponse().read().decode("utf-8")
+        assert "overlay overlay-tv" in overlay
+        assert "overlay-hide-status" in overlay
+        assert "-webkit-line-clamp: 1;" in overlay
+        assert "rgba(10, 12, 15, 0.50)" in overlay
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_template_path_overrides(monkeypatch, tmp_path):
+    dashboard_template = tmp_path / "dashboard.html"
+    overlay_template = tmp_path / "overlay.html"
+    dashboard_template.write_text("<html><body>DASH __ENDPOINT_PREFIX__ __USE_SSE__</body></html>")
+    overlay_template.write_text(
+        "<html><body>OVER __ENDPOINT_PREFIX__ __USE_SSE__ __OVERLAY_PRESET__ "
+        "__OVERLAY_STATUS_CLASS__ __OVERLAY_MAX_LINES__ __OVERLAY_PANEL_OPACITY__</body></html>"
+    )
+
+    monkeypatch.setenv("NOW_PLAYING_DASHBOARD_TEMPLATE_PATH", str(dashboard_template))
+    monkeypatch.setenv("NOW_PLAYING_OVERLAY_TEMPLATE_PATH", str(overlay_template))
+
+    server = np_service.NowPlayingHTTPServer(("127.0.0.1", 0), np_service.RequestHandler, lambda: {})
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        conn.request("GET", "/")
+        dashboard = conn.getresponse().read().decode("utf-8")
+        assert "DASH" in dashboard
+        assert "true" in dashboard
+
+        conn.request("GET", "/overlay?preset=tv&panel_opacity=0.55")
+        overlay = conn.getresponse().read().decode("utf-8")
+        assert "OVER" in overlay
+        assert "tv" in overlay
+        assert "0.55" in overlay
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_invalid_template_override_warns_and_falls_back(monkeypatch, tmp_path, caplog):
+    bad_overlay = tmp_path / "bad-overlay.html"
+    bad_overlay.write_text("<html><body>bad template without required tokens</body></html>")
+    monkeypatch.setenv("NOW_PLAYING_OVERLAY_TEMPLATE_PATH", str(bad_overlay))
+    caplog.set_level("WARNING", logger="now_playing")
+
+    server = np_service.NowPlayingHTTPServer(("127.0.0.1", 0), np_service.RequestHandler, lambda: {})
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        conn.request("GET", "/overlay")
+        overlay = conn.getresponse().read().decode("utf-8")
+        assert "Now Playing Overlay" in overlay
+        assert "overlay overlay-compact" in overlay
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert "Ignoring NOW_PLAYING_OVERLAY_TEMPLATE_PATH template" in caplog.text
+    assert "missing placeholders" in caplog.text
 
 
 def test_install_and_uninstall_service(monkeypatch, tmp_path, capsys):
@@ -634,10 +751,18 @@ def test_service_status_reports_install_and_runtime_state(monkeypatch, tmp_path,
     monkeypatch.setattr(np_service, "launch_agent_path", lambda: plist_path)
     monkeypatch.setattr(np_service, "launch_agent_label", lambda: "com.funkatron.now-playing")
     monkeypatch.setattr(np_service, "logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(np_service, "data_dir", lambda: tmp_path)
     monkeypatch.setattr(np_service, "service_is_loaded", lambda _label_ref: True)
     monkeypatch.setattr(np_service, "service_pid", lambda _label_ref: 12345)
     monkeypatch.setenv("NOW_PLAYING_HOST", "127.0.0.1")
     monkeypatch.setenv("NOW_PLAYING_PORT", "8976")
+    monkeypatch.setenv("OBSWS_ENABLED", "1")
+    monkeypatch.setenv("OBSWS_HOST", "localhost")
+    monkeypatch.setenv("OBSWS_PORT", "4455")
+    monkeypatch.setenv("OBSWS_PASSWORD", "secret")
+    monkeypatch.setenv("OBSWS_IMAGE_INPUT_NAME", "NPImage")
+    monkeypatch.setenv("OBSWS_TEXT_INPUT_NAME", "NPText")
+    monkeypatch.setenv("OBSWS_TEXT_FIELD", "text")
 
     assert np_service.service_status() == 0
 
@@ -647,6 +772,15 @@ def test_service_status_reports_install_and_runtime_state(monkeypatch, tmp_path,
     assert payload["running"] is True
     assert payload["pid"] == 12345
     assert payload["url"] == "http://127.0.0.1:8976/"
+    assert payload["obs"]["browser_overlay_url"] == "http://127.0.0.1:8976/overlay"
+    assert payload["obs"]["spotify_overlay_url"] == "http://127.0.0.1:8976/spotify/overlay"
+    assert payload["obs"]["files"]["song"] == str(tmp_path / "current_song.txt")
+    assert payload["obs"]["files"]["artwork"] == str(tmp_path / "current_artwork.png")
+    assert payload["obs"]["websocket"]["enabled"] is True
+    assert payload["obs"]["websocket"]["host"] == "localhost"
+    assert payload["obs"]["websocket"]["port"] == 4455
+    assert payload["obs"]["websocket"]["image_input_name"] == "NPImage"
+    assert payload["obs"]["websocket"]["text_input_name"] == "NPText"
 
 
 def test_spotify_session_command_and_terminal_detection(monkeypatch, tmp_path):

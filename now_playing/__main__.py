@@ -54,7 +54,11 @@ def main() -> None:
         images = provider.get_artworks()
         write_artworks_list(artworks_file, images)
         if images:
-            obs = OBSClient()
+            obs = OBSClient(
+                host=os.environ.get("OBSWS_HOST", "localhost"),
+                port=int(os.environ.get("OBSWS_PORT", "4455")),
+                password=os.environ.get("OBSWS_PASSWORD", ""),
+            )
             logging.getLogger().debug("Updating OBS now playing image: %s", images[0])
             obs.update_image_source(obs_source, images[0])
         else:
