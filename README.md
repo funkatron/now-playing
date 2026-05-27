@@ -1,13 +1,13 @@
 # Now Playing
 
-This repo runs a small macOS **now-playing** service. It polls Apple Music or Spotify, keeps local outputs up to date, and exposes current state over HTTP on `127.0.0.1`.
+This repo provides a small macOS now-playing service. It polls Apple Music or Spotify, keeps local outputs up to date, and serves current state over HTTP on `127.0.0.1`.
 
 **What you get:**
 
-- **Flat-file output** for OBS and other local consumers
-- Optional **OBS WebSocket** push for text and artwork
-- A **local HTTP API** and a simple **browser viewer**
-- **Apple Music** and **Spotify**, with **auto-detection** of the active provider
+- Flat-file output for OBS and other local consumers
+- Optional OBS WebSocket pushes for text and artwork
+- A local HTTP API and simple browser viewer
+- Apple Music and Spotify, with automatic detection of the active source
 
 ## Contents
 
@@ -57,12 +57,12 @@ open http://127.0.0.1:8976/
 
 **Behavior notes**
 
-- A bare `uv run np` runs `current --format json`.
-- Global flags such as `--source` and `--idle-text` go **before** the subcommand, e.g. `uv run np --source apple_music current --format text`.
+- `uv run np` (with no subcommand) runs `current --format json`.
+- Global flags such as `--source` and `--idle-text` go before the subcommand, for example: `uv run np --source apple_music current --format text`.
 - `install-service` leaves the LaunchAgent installed and running until you stop or remove it.
 - `uninstall-service` stops the service and removes the plist from `~/Library/LaunchAgents/`.
-- **Apple Music** fits the background LaunchAgent path best.
-- **Spotify** is easier to rely on from an interactive terminal session than from the background agent (see [Foreground and background](#foreground-and-background)).
+- Apple Music is the best fit for the background LaunchAgent path.
+- Spotify is usually more reliable from an interactive terminal session than from the background agent (see [Foreground and background](#foreground-and-background)).
 
 The service loads [`config.env`](config.env) when present. Copy from [`config.env.example`](config.env.example) and change only what you need.
 
@@ -79,7 +79,7 @@ The service loads [`config.env`](config.env) when present. Copy from [`config.en
 
 ### HTTP routes
 
-**Core**
+Core routes
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -90,8 +90,9 @@ The service loads [`config.env`](config.env) when present. Copy from [`config.en
 | `GET` | `/events` | Server-Sent Events stream for live UI updates |
 | `GET` | `/health` | Health check |
 | `GET` | `/` | Browser viewer |
+| `GET` | `/overlay` | Transparent Browser Source overlay for OBS |
 
-**Spotify interactive worker** (requires `start-spotify-session`; see below)
+Spotify interactive worker routes (requires `start-spotify-session`; see below)
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -100,22 +101,23 @@ The service loads [`config.env`](config.env) when present. Copy from [`config.en
 | `GET` | `/spotify/artwork` | Spotify-only artwork path as JSON |
 | `GET` | `/spotify/current_artwork.png` | Spotify-only artwork file |
 | `GET` | `/spotify/` | Spotify-only viewer |
+| `GET` | `/spotify/overlay` | Spotify-only transparent overlay |
 
 ## Foreground and background
 
-**One-shot sync** (writes `_data/` once):
+One-shot sync (writes `_data/` once):
 
 ```bash
 uv run np sync
 ```
 
-**Foreground server** (polling + HTTP in your terminal):
+Foreground server (polling + HTTP in your terminal):
 
 ```bash
 uv run np serve
 ```
 
-**Background service** (LaunchAgent):
+Background service (LaunchAgent):
 
 ```bash
 uv run np install-service
@@ -146,12 +148,12 @@ This starts a separate Spotify polling worker in Terminal or iTerm (not via `lau
 
 ### Viewer
 
-The browser UI is minimal: it uses **Server-Sent Events** on `/events`, so updates push from the server instead of polling `/current` on a timer.
+The browser UI is minimal: it uses Server-Sent Events on `/events`, so updates push from the server instead of polling `/current` on a timer.
 
 ### Debugging
 
-- **Port in use:** If `uv run np serve` prints `Address already in use`, stop the installed agent (`uv run np stop-service` or `uninstall-service`) or bind a different port.
-- **Wrong provider:** Run in the foreground so errors print to the terminal:
+- Port in use: If `uv run np serve` prints `Address already in use`, stop the installed agent (`uv run np stop-service` or `uninstall-service`) or bind a different port.
+- Wrong provider: Run in the foreground so errors print to the terminal:
 
 ```bash
 uv run np stop-service
@@ -192,18 +194,145 @@ open http://127.0.0.1:8976/spotify/
 
 - `/current` — machine-facing JSON.
 - `/` — human-facing viewer.
-- `/spotify/current` and `/spotify/` — Spotify worker (when that session is running).
+- `/overlay` — OBS Browser Source overlay.
+- `/spotify/current`, `/spotify/`, and `/spotify/overlay` — Spotify worker (when that session is running).
 
 ## OBS
 
-**Recommended:** file-based integration.
+Use one of these three modes:
 
-1. Point a text source at `_data/current_song.txt`.
-2. Point an image source at `_data/current_artwork.png`.
+| Goal | Recommended path |
+| --- | --- |
+| One source with artwork + text in one widget | Browser Source (`/overlay`) |
+| Most stable local setup | File sources (`current_song.txt` + `current_artwork.png`) |
+| Push updates directly into named OBS inputs | WebSocket (`OBSWS_*`) |
 
-That avoids WebSocket reconnect churn.
+Start with service health and integration values:
 
-**Optional WebSocket pushes:** set in `config.env`:
+```bash
+uv run np status
+```
+
+Use the `obs.files.*` absolute paths and `obs.*overlay_url` values from that JSON directly in OBS.
+
+### Browser Source (overlay URL)
+
+1. Start the service: `uv run np serve` (or `uv run np install-service`).
+2. In OBS: **Sources → + → Browser**.
+3. URL: `http://127.0.0.1:8976/overlay` (or `obs.browser_overlay_url` from `uv run np status`).
+4. Set width/height to match your scene layout (for example 760x184), then position as needed.
+
+Spotify-only worker overlay:
+
+- URL: `http://127.0.0.1:8976/spotify/overlay`
+- Start worker first: `uv run np start-spotify-session`
+
+### Overlay customization
+
+#### Quick recipes
+
+Use these Browser Source URLs directly in OBS:
+
+| Goal | URL |
+| --- | --- |
+| Compact default | `http://127.0.0.1:8976/overlay?preset=compact` |
+| TV mode | `http://127.0.0.1:8976/overlay?preset=tv` |
+| TV mode with fewer line breaks | `http://127.0.0.1:8976/overlay?preset=tv&max_lines=1` |
+| TV mode, hide status line | `http://127.0.0.1:8976/overlay?preset=tv&hide_status=1` |
+| TV mode, lighter panel | `http://127.0.0.1:8976/overlay?preset=tv&panel_opacity=0.50` |
+
+Spotify worker versions use the same flags on `/spotify/overlay`, for example:
+`http://127.0.0.1:8976/spotify/overlay?preset=tv&max_lines=1`.
+
+#### URL flags reference
+
+| URL flag | Example | Env default | Purpose |
+| --- | --- | --- | --- |
+| `preset` | `?preset=tv` | `NOW_PLAYING_OVERLAY_PRESET` | `compact` or `tv` layout scale. |
+| `hide_status` | `?hide_status=1` | `NOW_PLAYING_OVERLAY_HIDE_STATUS` | Hide or show the PLAYING/IDLE label. |
+| `max_lines` | `?max_lines=1` | `NOW_PLAYING_OVERLAY_MAX_LINES` | Clamp title + metadata labels to 1-3 lines. |
+| `panel_opacity` | `?panel_opacity=0.50` | `NOW_PLAYING_OVERLAY_PANEL_OPACITY` | Overlay panel opacity (0.20-0.95). |
+
+URL flags override env defaults when both are set.
+
+#### Template override quickstart
+
+1. Copy bundled templates into a local folder you control:
+
+```bash
+mkdir -p "$HOME/.config/now-playing/templates"
+cp now_playing/templates/dashboard.html "$HOME/.config/now-playing/templates/dashboard.html"
+cp now_playing/templates/overlay.html "$HOME/.config/now-playing/templates/overlay.html"
+```
+
+2. Edit those files and keep required placeholders intact (see below).
+3. Point `config.env` at your directory:
+
+```bash
+NOW_PLAYING_TEMPLATE_DIR=/Users/<you>/.config/now-playing/templates
+```
+
+4. Restart the service:
+
+```bash
+uv run np stop-service
+uv run np start-service
+```
+
+If you run in foreground instead of LaunchAgent, restart with `Ctrl+C` then `uv run np serve`.
+
+#### Precedence (what wins)
+
+For overlay behavior:
+
+1. URL query flags (`/overlay?...`)
+2. `config.env` / environment defaults
+3. built-in defaults
+
+This lets you keep a stable default in `config.env` and still tune per-scene URLs in OBS.
+
+#### Template overrides
+
+- `NOW_PLAYING_DASHBOARD_TEMPLATE_PATH` and `NOW_PLAYING_OVERLAY_TEMPLATE_PATH` can point to custom HTML files.
+- `NOW_PLAYING_TEMPLATE_DIR` can point to a directory containing `dashboard.html` and `overlay.html`.
+- Explicit `*_TEMPLATE_PATH` values take precedence over `NOW_PLAYING_TEMPLATE_DIR`.
+
+Template source precedence:
+
+1. `NOW_PLAYING_*_TEMPLATE_PATH`
+2. `NOW_PLAYING_TEMPLATE_DIR`
+3. bundled templates (`now_playing/templates/*.html`)
+4. in-code fallback template
+
+#### Required placeholders in custom templates
+
+`dashboard.html` must include:
+
+- `__ENDPOINT_PREFIX__`
+- `__USE_SSE__`
+
+`overlay.html` must include:
+
+- `__ENDPOINT_PREFIX__`
+- `__USE_SSE__`
+- `__OVERLAY_PRESET__`
+- `__OVERLAY_STATUS_CLASS__`
+- `__OVERLAY_MAX_LINES__`
+- `__OVERLAY_PANEL_OPACITY__`
+
+If a custom template is missing required placeholders, the service logs a warning and automatically falls back to the next source in the precedence list.
+
+### File sources (text + image)
+
+1. Run `uv run np status` and copy `obs.files.song` and `obs.files.artwork`.
+2. In OBS: **Sources → + → Text** (or **Text (GDI+)**) and enable **Read from file** with `obs.files.song`.
+3. In OBS: **Sources → + → Image** and select `obs.files.artwork`.
+
+This path avoids WebSocket reconnect churn and works even when OBS WebSocket is disabled.
+
+### WebSocket push (optional)
+
+Set in `config.env`:
 
 ```bash
 OBSWS_ENABLED=1
@@ -215,7 +344,17 @@ OBSWS_TEXT_INPUT_NAME=NPText
 OBSWS_TEXT_FIELD=text
 ```
 
-When enabled, the service pushes image updates and optional text updates on state changes.
+Then:
+
+1. In OBS, enable WebSocket server and set matching host/port/password.
+2. Create input names that match `OBSWS_IMAGE_INPUT_NAME` and `OBSWS_TEXT_INPUT_NAME`.
+3. Run `uv run np sync` or `uv run np serve`; updates are pushed on track/artwork change.
+
+### Recovery checks
+
+- **Service not reachable:** `curl http://127.0.0.1:8976/health`
+- **Need current paths/URLs again:** `uv run np status`
+- **Port already used:** stop existing service (`uv run np stop-service`) or run `uv run np serve --port <other-port>`
 
 ## Configuration
 
@@ -227,6 +366,13 @@ Set variables in [`config.env`](config.env) (loaded automatically by the CLI). S
 | `NOW_PLAYING_IDLE_TEXT` | Text for `_data/current_song.txt` when idle; leave empty for an empty file. |
 | `NOW_PLAYING_HOST` | Bind address for the HTTP API (keep `127.0.0.1` unless you need remote access). |
 | `NOW_PLAYING_PORT` | HTTP port (default `8976`). |
+| `NOW_PLAYING_OVERLAY_PRESET` | Default overlay preset: `compact` or `tv`. |
+| `NOW_PLAYING_OVERLAY_HIDE_STATUS` | `1` hides status label on overlays; `0` shows it. |
+| `NOW_PLAYING_OVERLAY_MAX_LINES` | Default line clamp for title + metadata on overlays (1-3). |
+| `NOW_PLAYING_OVERLAY_PANEL_OPACITY` | Default panel opacity for overlays (0.20-0.95). |
+| `NOW_PLAYING_DASHBOARD_TEMPLATE_PATH` | Optional absolute path to override dashboard HTML template. |
+| `NOW_PLAYING_OVERLAY_TEMPLATE_PATH` | Optional absolute path to override overlay HTML template. |
+| `NOW_PLAYING_TEMPLATE_DIR` | Optional directory override containing `dashboard.html` and `overlay.html`. |
 | `INTERVAL_SECONDS` | Poll interval for `serve` and the LaunchAgent service. |
 | `PYTHON_LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. |
 | `OBSWS_ENABLED` | `1` to enable OBS WebSocket; `0` for files only. |
@@ -244,7 +390,7 @@ Global pattern:
 uv run np [--source auto|apple_music|spotify] [--idle-text "Idle text"] <command>
 ```
 
-**Reference**
+Reference
 
 | Command | What it does |
 | --- | --- |
@@ -256,13 +402,13 @@ uv run np [--source auto|apple_music|spotify] [--idle-text "Idle text"] <command
 | `init-config` | Creates `config.env` from `config.env.example` if missing. |
 | `install-service` | Writes LaunchAgent plist and starts the background service. |
 | `start-service` / `stop-service` / `restart-service` | Control the installed agent without removing the plist. |
-| `status` | JSON: installed, loaded, running, plist path, log path, viewer URL. |
+| `status` | JSON: install/runtime state plus OBS overlay URLs, file paths, and WebSocket settings. |
 | `tail` / `tail --follow` | Recent `launchd` logs; `--follow` streams until Ctrl-C. |
 | `start-spotify-session` | Spotify worker in Terminal/iTerm when background path is unreliable. |
 | `stop-spotify-session` | Stops that worker session. |
 | `uninstall-service` | Stops service and removes the plist. |
 
-**Examples**
+Examples
 
 ```bash
 uv run np

@@ -6,7 +6,7 @@ class OBSClient:
     def __init__(self, host: str = "localhost", port: int = 4455, password: Optional[str] = None) -> None:
         self.host = host
         self.port = port
-        self.password = password or "tH3NSzMaqHHaWExM"
+        self.password = password or ""
 
     def update_image_source(self, source_name: str, file_path: str) -> None:
         from obswebsocket import obsws, requests  # type: ignore
