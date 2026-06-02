@@ -1,158 +1,89 @@
-# Tool Docs Skill
+# Tool documentation standards (now-playing)
 
-Use this when writing or revising docs for a CLI, local service, operator script, or small developer tool.
+Use this when writing or revising docs for the `np` CLI and local service.
 
-The goal is simple: a reader should be able to install the tool, run it, verify it, and recover from failure without reading the source.
+**Goal:** a reader can install, run, verify, and recover without reading source code.
 
-## What Good Tool Docs Must Do
+## Project doc roles
 
-Tool docs should answer these quickly:
+| File | Audience | Must answer |
+| --- | --- | --- |
+| [README.md](README.md) | Operators, OBS setup | What to run first; how to know it works; how to stop |
+| [docs/integration-contract.md](docs/integration-contract.md) | Contributors, integrators | Full CLI/HTTP/files/env/Python contract |
+| [config.env.example](config.env.example) | First-time config | Annotated defaults and precedence |
+| [AGENTS.md](AGENTS.md) | Coding agents | Stack, tests, which doc to update |
 
-1. What is this tool for?
-2. How do I install it?
-3. What command do I run first?
-4. How do I know it is working?
+Keep operator content in README. Keep exhaustive reference in the integration contract. Cross-link; do not copy large tables twice.
+
+## Required reader questions
+
+Every doc pass should make these obvious:
+
+1. What command do I run first?
+2. What does success look like?
+3. Which URL is for humans vs machines vs OBS?
+4. Does this command leave something running in the background?
 5. How do I stop it?
-6. Where do I look when it fails?
+6. Where are logs (`uv run np tail`)?
+7. What if port 8976 is in use?
 
-If those answers are not obvious in under a minute, the docs are too hard to use.
+## README structure (this repo)
 
-## Default Structure
+Use this order:
 
-Use this order unless there is a strong reason not to:
+1. Short summary + what you get
+2. Requirements
+3. Start here (one default command path)
+4. How do I… (task table)
+5. Outputs and HTTP endpoints
+6. Foreground vs background (+ Spotify session caveat)
+7. OBS (file / browser / websocket paths)
+8. Configuration (precedence + variable table)
+9. Commands (common tasks table, then reference)
+10. curl examples (short)
+11. Docs map
 
-1. Short summary
-2. Out-of-the-box capabilities
-3. Start here / quick start
-4. Outputs and interfaces
-5. Foreground vs background operation
-6. Recovery and debugging
-7. API / integration details
-8. Configuration reference
-9. Command reference
+Put recovery steps near the modes they apply to (foreground vs LaunchAgent).
 
-Put the happy path before the reference material.
+## Configuration docs
 
-## Writing Rules
+Document explicitly:
 
-### Start With The Job
+- **Precedence:** shell env → `config.env` (`setdefault`) → code defaults
+- **`config.env` is gitignored** — no secrets in git
+- Optional vars commented out in `config.env.example`
+- Impact of each variable, not just the name
 
-Lead with:
+## Side effects to call out
 
-- what problem the tool solves
-- who it is for
-- what it produces
-- the first command most users should run
+- `install-service` writes `~/Library/LaunchAgents/*.plist` and starts the agent
+- `serve` and the agent write under `_data/` and `_logs/launchd.log`
+- `OBSWS_ENABLED=1` pushes to OBS over WebSocket when track or artwork changes (`sync` / `serve` poll)
+- `start-spotify-session` opens Terminal/iTerm with a background poll loop (**unstable** path)
 
-Do not open with flags, internals, or edge cases.
+## Honest platform notes
 
-### Be Concrete
+- Apple Music: best fit for LaunchAgent background path
+- Spotify: **unstable** — `start-spotify-session` + `/spotify/*` namespace; avoid for production streams
+- Legacy `python -m now_playing` exists; prefer `uv run np` in docs
 
-Prefer real commands and real paths:
+## Revision workflow
 
-- `uv run np serve`
-- `open http://127.0.0.1:8976/`
-- `_data/current_song.txt`
+1. Read `uv run np --help` and [`config.env.example`](config.env.example).
+2. Compare to [docs/integration-contract.md](docs/integration-contract.md).
+3. Rewrite start path if first-run is unclear.
+4. Add or update the **How do I…** task table when adding commands.
+5. Update integration contract for any public interface change.
+6. Run a skeptical read-through (impatient new user).
+7. Polish prose — direct verbs, named paths, no filler.
 
-Avoid vague language when a short example would be clearer.
+## Quality checklist
 
-### Separate Interfaces Clearly
-
-If a tool exposes more than one interface, name them explicitly:
-
-- human-facing viewer
-- machine-facing JSON endpoint
-- flat-file outputs
-- logs
-
-Do not assume the reader will infer the difference.
-
-### Document Side Effects
-
-Call out what changes system state:
-
-- installs a LaunchAgent
-- leaves a background service running
-- writes files under `_data/`
-- updates OBS over websocket
-
-Users should not discover side effects by accident.
-
-### Tell The Truth
-
-If something is beta, flaky, platform-specific, or incomplete, say that directly.
-
-Examples:
-
-- auto-detection works but is still being validated
-- foreground mode is the best debugging path
-- a command exists, but richer diagnostics do not yet
-
-Honest docs build trust faster than polished fiction.
-
-### Keep Reference Tight
-
-Command docs should be easy to scan:
-
-- one line for what the command does
-- one short note for unusual behavior
-- one example when needed
-
-Config docs should explain impact, not just variable names.
-
-## Required Workflow
-
-When revising tool docs, use this process:
-
-1. Read the actual CLI help and config template.
-2. Check the docs against current behavior.
-3. Rewrite the start path so first use is obvious.
-4. Make interfaces and side effects explicit.
-5. Add recovery steps for common failures.
-6. Run a devil’s-advocate pass.
-7. Polish using that feedback.
-
-Do not stop after “technically correct.” Aim for “hard to misuse.”
-
-## Devil's-Advocate Pass
-
-Before calling the docs done, read them as if you are:
-
-- impatient
-- skeptical
-- distracted
-- unfamiliar with the code
-
-Ask:
-
-- Do I know what to run first?
-- Do I know what success looks like?
-- Do I know which URL is for humans and which is for machines?
-- Do I know whether this command leaves something running?
-- Do I know what to do if the default port is already in use?
-- Do I know how to stop the service?
-- Do I know where logs are or how to tail them?
-- Are any sections duplicated, contradictory, or overly cute?
-
-Then revise the docs using that pass as input, not as a separate report.
-
-## Good Defaults
-
-Assume the reader wants the simplest path:
-
-- local loopback host
-- sensible polling interval
-- file-based OBS integration first
-
-Show advanced options only after the default setup is clear.
-
-## Recovery Is Part Of The Product
-
-Good tool docs explain how to get unstuck:
-
-- how to see logs
-- how to stop background services
-- how to rerun in the foreground
-- how to verify current state
-
-The recovery path is part of the product, not an afterthought.
+- [ ] One-command default in Start here
+- [ ] How do I… / common tasks table present
+- [ ] Stop + verify steps documented
+- [ ] Config precedence documented
+- [ ] Side effects explicit for service install
+- [ ] Recovery for port conflict and wrong provider
+- [ ] integration-contract.md updated for interface changes
+- [ ] No contradictory paths between README and contract

@@ -1,16 +1,14 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
         {
-            "type": "bashdb",
+            "name": "np serve",
+            "type": "debugpy",
             "request": "launch",
-            "name": "Bash-Debug (update.sh)",
+            "module": "np_service",
+            "args": ["serve"],
             "cwd": "${workspaceFolder}",
-            "program": "${workspaceFolder}/update.sh",
-            "args": ["applemusic"]
-        },
+            "console": "integratedTerminal"
+        }
     ]
 }
