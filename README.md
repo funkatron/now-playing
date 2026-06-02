@@ -410,6 +410,7 @@ curl http://127.0.0.1:8976/spotify/current    # when Spotify session is running
 | [docs/integration-contract.md](docs/integration-contract.md) | Contributors, integrators | CLI/HTTP/files/env/Python contract |
 | [AGENTS.md](AGENTS.md) | Coding agents | Stack, tests, branch naming |
 | [TOOL_DOCS_NOTES.md](TOOL_DOCS_NOTES.md) | Doc authors | Structure and quality checklist |
+| [CHANGELOG.md](CHANGELOG.md) | Upgraders, release readers | Version history and breaking changes |
 | [config.env.example](config.env.example) | First-time setup | Annotated defaults |
 
 When you add commands, routes, env vars, or side effects, update this README and [docs/integration-contract.md](docs/integration-contract.md).

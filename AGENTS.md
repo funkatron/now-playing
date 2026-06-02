@@ -19,6 +19,7 @@ python3 scripts/smoke_install.py --with-service   # optional; macOS + LaunchAgen
 | File | Update when |
 | --- | --- |
 | [`README.md`](README.md) | Operator-facing behavior, OBS setup, recovery, env summary |
+| [`CHANGELOG.md`](CHANGELOG.md) | Released versions, breaking changes, upgrade notes |
 | [`docs/integration-contract.md`](docs/integration-contract.md) | CLI subcommands, HTTP routes, `_data/*`, Python exports |
 | [`config.env.example`](config.env.example) | New/changed env vars (with comments) |
 | [`TOOL_DOCS_NOTES.md`](TOOL_DOCS_NOTES.md) | Doc structure standards (rare) |
