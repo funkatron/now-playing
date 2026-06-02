@@ -13,6 +13,10 @@ venv/
 .venv/
 config.env
 
+# Local browser debug (playwright-cli)
+.playwright-cli/
+output/playwright/
+
 # app
 _data/
 _logs/
