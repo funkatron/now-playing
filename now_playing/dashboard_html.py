@@ -83,7 +83,8 @@ def render_dashboard(route_prefix: str, use_sse: bool) -> str:
     }
     .card {
       position: relative;
-      width: min(1120px, calc(100vw - 40px));
+      width: min(1120px, 100%);
+      box-sizing: border-box;
       border-radius: 30px;
       padding: 24px;
       background:
@@ -154,7 +155,7 @@ def render_dashboard(route_prefix: str, use_sse: bool) -> str:
       display: grid;
       gap: 22px;
       grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
-      align-items: stretch;
+      align-items: start;
     }
     .artwork {
       aspect-ratio: 1;
@@ -162,6 +163,7 @@ def render_dashboard(route_prefix: str, use_sse: bool) -> str:
       overflow: hidden;
       background: var(--art-bg);
       display: grid;
+      grid-template: 1fr / 1fr;
       place-items: center;
       border: 1px solid rgba(255, 255, 255, 0.06);
       box-shadow:
@@ -182,18 +184,22 @@ def render_dashboard(route_prefix: str, use_sse: bool) -> str:
     linear-gradient(135deg, transparent 45%, rgba(199, 70, 45, 0.14));
       pointer-events: none;
     }
+    .artwork > * {
+      grid-area: 1 / 1;
+    }
     .artwork img {
       width: 100%;
       height: 100%;
       object-fit: cover;
       display: none;
+      position: relative;
+      z-index: 1;
     }
     .content {
       display: flex;
       flex-direction: column;
-      justify-content: center;
+      justify-content: flex-start;
       min-width: 0;
-      padding-right: 8px;
     }
     .kicker {
       color: var(--muted);
@@ -204,11 +210,14 @@ def render_dashboard(route_prefix: str, use_sse: bool) -> str:
     .title {
       margin-top: 12px;
       font-size: clamp(40px, 6vw, 84px);
-      line-height: 0.9;
+      line-height: 1.05;
       font-weight: 800;
       font-family: var(--font-iosevka);
       letter-spacing: -0.08em;
       text-wrap: balance;
+      overflow-wrap: break-word;
+      word-break: break-word;
+      min-width: 0;
     }
     .meta {
       margin-top: 10px;
@@ -246,7 +255,8 @@ def render_dashboard(route_prefix: str, use_sse: bool) -> str:
       display: grid;
       gap: 12px;
       margin-top: 20px;
-      grid-template-columns: repeat(2, minmax(180px, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      min-width: 0;
     }
     .detail {
       padding-top: 12px;
@@ -318,17 +328,23 @@ def render_dashboard(route_prefix: str, use_sse: bool) -> str:
       color: var(--soft);
       font-size: 12px;
       line-height: 1.45;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .provider-error {
       color: #ffb4a5;
     }
+    @media (min-width: 961px) {
+      .content {
+    padding-right: 8px;
+      }
+    }
     @media (max-width: 960px) {
       .grid {
     grid-template-columns: 1fr;
-    gap: 22px;
       }
-      .content {
-    padding-right: 0;
+      .meta {
+    max-width: none;
       }
       .details {
     grid-template-columns: 1fr;
@@ -347,6 +363,7 @@ def render_dashboard(route_prefix: str, use_sse: bool) -> str:
       }
       .title {
     font-size: clamp(34px, 11vw, 56px);
+    letter-spacing: -0.05em;
       }
     }
   </style>
