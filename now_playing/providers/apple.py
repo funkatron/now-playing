@@ -21,6 +21,8 @@ def extract_apple_music_artwork(track) -> str:
         f"{track.databaseID()}_{track.artist()}_{track.album()}_{track.name()}"
     )
     cache_path = cache_dir / f"{cache_name}.png"
+    if cache_path.exists():
+        return str(cache_path)
 
     first_artwork = artworks[0]
     artwork_data = first_artwork.data()

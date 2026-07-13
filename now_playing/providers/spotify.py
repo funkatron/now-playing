@@ -86,33 +86,6 @@ def spotify_track_fields(snapshot: list[str]) -> tuple[str, str, str, str]:
     return tuple(part.strip() for part in snapshot[1:5])
 
 
-def get_apple_music_track() -> TrackInfo:
-    import ScriptingBridge
-
-    music_app = ScriptingBridge.SBApplication.applicationWithBundleIdentifier_("com.apple.Music")
-    if not music_app or not music_app.isRunning():
-        return TrackInfo(source="apple_music", state="not_running", updated_at=iso_now())
-
-    if music_app.playerState() != PLAYING_STATE_CODE:
-        return TrackInfo(source="apple_music", state="idle", updated_at=iso_now())
-
-    current_track = music_app.currentTrack()
-    if current_track is None or not current_track.name():
-        return TrackInfo(source="apple_music", state="idle", updated_at=iso_now())
-
-    year = current_track.year()
-    return TrackInfo(
-        source="apple_music",
-        state="playing",
-        title=str(current_track.name() or ""),
-        artist=str(current_track.artist() or ""),
-        album=str(current_track.album() or ""),
-        year=int(year) if year else None,
-        artwork_path=extract_apple_music_artwork(current_track),
-        updated_at=iso_now(),
-    )
-
-
 def get_spotify_track() -> TrackInfo:
     try:
         snapshot = query_spotify_snapshot()
