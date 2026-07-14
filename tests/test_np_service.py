@@ -183,12 +183,16 @@ def test_extract_apple_music_artwork_accepts_nsrepresentation(monkeypatch, tmp_p
 
 
 def test_apple_artwork_uses_cache_without_decode(monkeypatch, tmp_path):
+    apple = importlib.import_module("now_playing.providers.apple")
+    apple.reset_apple_music_runtime_state()
+
     cache_dir = tmp_path / ".now-playing" / "artwork-cache"
     cache_dir.mkdir(parents=True)
     cache_path = cache_dir / "42_Artist_Album_Song.png"
     cache_path.write_bytes(b"existing-png")
 
     decode_calls = []
+    artwork_calls = []
 
     class FakeBitmap:
         @classmethod
@@ -205,6 +209,7 @@ def test_apple_artwork_uses_cache_without_decode(monkeypatch, tmp_path):
 
     class FakeTrack:
         def artworks(self):
+            artwork_calls.append("artworks")
             return [FakeArtwork()]
 
         def databaseID(self):
@@ -219,7 +224,7 @@ def test_apple_artwork_uses_cache_without_decode(monkeypatch, tmp_path):
         def name(self):
             return "Song"
 
-    monkeypatch.setattr(importlib.import_module("now_playing.providers.apple").Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(apple.Path, "home", lambda: tmp_path)
     monkeypatch.setitem(
         np_service.sys.modules,
         "AppKit",
@@ -230,7 +235,7 @@ def test_apple_artwork_uses_cache_without_decode(monkeypatch, tmp_path):
 
     assert result == str(cache_path)
     assert decode_calls == []
-
+    assert artwork_calls == [], "cache hit must not call track.artworks()"
 
 def test_track_info_text_and_fingerprint():
     track = np_service.TrackInfo(
@@ -574,7 +579,10 @@ def test_request_handler_endpoints():
         conn = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
         conn.request("GET", "/health")
         health = json.loads(conn.getresponse().read().decode("utf-8"))
-        assert health == {"status": "ok"}
+        assert health["status"] == "ok"
+        assert health["event_clients"] == 0
+        assert isinstance(health["threads"], int)
+        assert health["threads"] >= 1
 
         conn.request("GET", "/")
         dashboard = conn.getresponse().read().decode("utf-8")
