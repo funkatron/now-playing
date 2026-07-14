@@ -30,6 +30,10 @@ class NowPlayingHTTPServer(ThreadingHTTPServer):
         with self.event_clients_lock:
             self.event_clients.discard(handler)
 
+    def event_client_count(self) -> int:
+        with self.event_clients_lock:
+            return len(self.event_clients)
+
     def broadcast_event(self, payload: dict) -> None:
         message = f"event: now_playing\ndata: {json.dumps(payload, sort_keys=True)}\n\n".encode("utf-8")
         with self.event_clients_lock:
@@ -114,7 +118,13 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/health":
-            self.respond_json({"status": "ok"})
+            self.respond_json(
+                {
+                    "status": "ok",
+                    "event_clients": self.server.event_client_count(),
+                    "threads": threading.active_count(),
+                }
+            )
             return
 
         payload = self.server.current_payload_getter()
@@ -210,70 +220,9 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
         try:
+            # Short interval so dead OBS/browser sockets are discovered quickly.
             while True:
-                time.sleep(60)
-                self.wfile.write(b": keepalive\n\n")
-                self.wfile.flush()
-        except Exception:
-            pass
-        finally:
-            self.server.remove_event_client(self)
-
-    def respond_json(self, payload: dict) -> None:
-        body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def respond_html(self, body: str) -> None:
-        content = body.encode("utf-8")
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(content)))
-        self.end_headers()
-        self.wfile.write(content)
-
-    def respond_text(self, body: str) -> None:
-        content = body.encode("utf-8")
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(content)))
-        self.end_headers()
-        self.wfile.write(content)
-
-    def respond_artwork(self, namespace: str = "current") -> None:
-        path = namespaced_current_artwork_file(namespace)
-        if not path.exists():
-            self.send_error(HTTPStatus.NOT_FOUND, "Artwork not found")
-            return
-
-        content = path.read_bytes()
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "image/png")
-        self.send_header("Content-Length", str(len(content)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(content)
-
-    def respond_events(self) -> None:
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
-        self.end_headers()
-
-        self.server.add_event_client(self)
-        initial_payload = self.server.current_payload_getter()
-        self.wfile.write(
-            f"event: now_playing\ndata: {json.dumps(initial_payload, sort_keys=True)}\n\n".encode("utf-8")
-        )
-        self.wfile.flush()
-
-        try:
-            while True:
-                time.sleep(60)
+                time.sleep(5)
                 self.wfile.write(b": keepalive\n\n")
                 self.wfile.flush()
         except Exception:

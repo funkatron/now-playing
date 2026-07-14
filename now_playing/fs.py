@@ -25,8 +25,16 @@ def copy_file_if_changed(source: Path, destination: Path) -> bool:
     if not source.exists():
         return False
 
-    if destination.exists() and source.read_bytes() == destination.read_bytes():
-        return False
+    if destination.exists():
+        source_stat = source.stat()
+        dest_stat = destination.stat()
+        if (
+            source_stat.st_size == dest_stat.st_size
+            and source_stat.st_mtime_ns == dest_stat.st_mtime_ns
+        ):
+            return False
+        if source.read_bytes() == destination.read_bytes():
+            return False
 
     tmp_path = destination.with_suffix(destination.suffix + ".tmp")
     shutil.copyfile(source, tmp_path)

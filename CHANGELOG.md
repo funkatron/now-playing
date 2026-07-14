@@ -6,6 +6,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This pr
 
 ## [Unreleased]
 
+### Fixed
+
+- Reduce LaunchAgent memory churn: skip Apple Music artwork decode when cache exists, throttle Spotify diagnostics in `auto` mode while Apple Music is playing, and avoid full PNG byte compares when file stat is unchanged.
+- Stop calling Apple Music `artworks()` on cache hits (metadata-first path); reuse the ScriptingBridge Music app; drain an autorelease pool each poll. `/health` and `np status` now report SSE client and thread counts; SSE keepalive probes every 5s.
+
 ## [0.2.0] - 2026-06-02
 
 First release after v0.1.0. The project is a **uv-backed `np` CLI** with optional LaunchAgent, HTTP API, and OBS integration.

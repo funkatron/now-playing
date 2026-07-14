@@ -182,6 +182,61 @@ def test_extract_apple_music_artwork_accepts_nsrepresentation(monkeypatch, tmp_p
     assert written_paths == [result]
 
 
+def test_apple_artwork_uses_cache_without_decode(monkeypatch, tmp_path):
+    apple = importlib.import_module("now_playing.providers.apple")
+    apple.reset_apple_music_runtime_state()
+
+    cache_dir = tmp_path / ".now-playing" / "artwork-cache"
+    cache_dir.mkdir(parents=True)
+    cache_path = cache_dir / "42_Artist_Album_Song.png"
+    cache_path.write_bytes(b"existing-png")
+
+    decode_calls = []
+    artwork_calls = []
+
+    class FakeBitmap:
+        @classmethod
+        def imageRepWithData_(cls, data):
+            decode_calls.append(data)
+            return cls()
+
+        def representationUsingType_properties_(self, _file_type, _props):
+            raise AssertionError("decode should not run when cache exists")
+
+    class FakeArtwork:
+        def data(self):
+            raise AssertionError("artwork data should not be read when cache exists")
+
+    class FakeTrack:
+        def artworks(self):
+            artwork_calls.append("artworks")
+            return [FakeArtwork()]
+
+        def databaseID(self):
+            return 42
+
+        def artist(self):
+            return "Artist"
+
+        def album(self):
+            return "Album"
+
+        def name(self):
+            return "Song"
+
+    monkeypatch.setattr(apple.Path, "home", lambda: tmp_path)
+    monkeypatch.setitem(
+        np_service.sys.modules,
+        "AppKit",
+        SimpleNamespace(NSBitmapImageRep=FakeBitmap, NSPNGFileType=object()),
+    )
+
+    result = np_service.extract_apple_music_artwork(FakeTrack())
+
+    assert result == str(cache_path)
+    assert decode_calls == []
+    assert artwork_calls == [], "cache hit must not call track.artworks()"
+
 def test_track_info_text_and_fingerprint():
     track = np_service.TrackInfo(
         source="apple_music",
@@ -309,6 +364,45 @@ def test_select_track_with_diagnostics_reports_both_sources(monkeypatch):
     assert track.source == "spotify"
     assert providers["apple_music"]["state"] == "idle"
     assert providers["spotify"]["state"] == "playing"
+
+
+def test_auto_throttles_spotify_when_apple_playing(monkeypatch):
+    auto_module = importlib.import_module("now_playing.providers.auto")
+    auto_module.reset_spotify_diagnostics_cache()
+
+    playing_apple = np_service.TrackInfo(
+        source="apple_music",
+        state="playing",
+        title="Song",
+        artist="Artist",
+        album="Album",
+        updated_at="now",
+    )
+    spotify_calls = []
+
+    def fake_inspect(source):
+        if source == "apple_music":
+            return playing_apple, np_service.ProviderSnapshot(
+                source="apple_music",
+                state="playing",
+                detail="Song / Artist / Album",
+                updated_at="now",
+            )
+        if source == "spotify":
+            spotify_calls.append(source)
+            return np_service.TrackInfo(source="spotify", state="idle", updated_at="now"), np_service.ProviderSnapshot(
+                source="spotify",
+                state="idle",
+                updated_at="now",
+            )
+        raise AssertionError(f"unexpected provider {source}")
+
+    patch_impl(monkeypatch, "inspect_provider", fake_inspect)
+
+    np_service.select_track_with_diagnostics("auto")
+    np_service.select_track_with_diagnostics("auto")
+
+    assert spotify_calls == ["spotify"]
 
 
 def test_get_spotify_track_uses_applescript_output(monkeypatch):
@@ -485,7 +579,10 @@ def test_request_handler_endpoints():
         conn = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
         conn.request("GET", "/health")
         health = json.loads(conn.getresponse().read().decode("utf-8"))
-        assert health == {"status": "ok"}
+        assert health["status"] == "ok"
+        assert health["event_clients"] == 0
+        assert isinstance(health["threads"], int)
+        assert health["threads"] >= 1
 
         conn.request("GET", "/")
         dashboard = conn.getresponse().read().decode("utf-8")

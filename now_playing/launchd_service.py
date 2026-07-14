@@ -178,11 +178,39 @@ def restart_service() -> int:
     return start_service()
 
 
+def _process_memory_mb(pid: Optional[int]) -> Optional[float]:
+    if not pid:
+        return None
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "rss=", "-p", str(pid)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        rss_kb = int(result.stdout.strip().split()[0])
+        return round(rss_kb / 1024.0, 1)
+    except Exception:
+        return None
+
+
+def _runtime_health() -> dict:
+    url = service_http_url().rstrip("/") + "/health"
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(url, timeout=1.5) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return {}
+
+
 def service_status() -> int:
     label_ref = launchctl_label_ref()
     installed = service_is_installed()
     loaded = service_is_loaded(label_ref)
     pid = service_pid(label_ref) if loaded else None
+    health = _runtime_health() if pid else {}
 
     payload = {
         "label": launch_agent_label(),
@@ -194,6 +222,11 @@ def service_status() -> int:
         "log_path": str(logs_dir() / "launchd.log"),
         "url": service_http_url(),
         "obs": obs_integration_info(),
+        "runtime": {
+            "rss_mb": _process_memory_mb(pid),
+            "event_clients": health.get("event_clients"),
+            "threads": health.get("threads"),
+        },
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0 if installed else 1
